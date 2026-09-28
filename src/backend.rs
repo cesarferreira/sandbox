@@ -185,6 +185,8 @@ pub struct RunSpec {
     pub labels: Vec<(String, String)>,
     pub mounts: Vec<Mount>,
     pub workdir: PathBuf,
+    /// Persistent, per-project home directory inside the box.
+    pub home: PathBuf,
     pub env: Vec<String>,
     pub uid: u32,
     pub gid: u32,
@@ -233,8 +235,7 @@ pub fn run_args(kind: Kind, spec: &RunSpec) -> Vec<String> {
         ]));
     }
 
-    // Arbitrary UIDs have no passwd entry, so give tools a writable HOME.
-    a.extend(["-e".into(), "HOME=/tmp".into()]);
+    a.extend(["-e".into(), format!("HOME={}", spec.home.display())]);
     for e in &spec.env {
         a.extend(["-e".into(), e.clone()]);
     }
@@ -489,6 +490,7 @@ mod tests {
                 },
             ],
             workdir: "/workspace/app".into(),
+            home: "/home/cesar".into(),
             env: vec!["FOO=bar".into()],
             uid: 501,
             gid: 20,
@@ -524,6 +526,7 @@ mod tests {
         assert!(has_pair(&a, "--network", "none"));
         assert!(has_pair(&a, "--memory", "8192M"));
         assert!(has_pair(&a, "-w", "/workspace/app"));
+        assert!(has_pair(&a, "-e", "HOME=/home/cesar"));
         assert!(!a.contains(&"--pids-limit".to_string()));
         assert_eq!(&a[a.len() - 3..], ["debian:bookworm-slim", "bash", "-l"]);
     }

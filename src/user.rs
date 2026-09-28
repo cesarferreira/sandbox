@@ -23,6 +23,11 @@ impl BoxUser {
         }
     }
 
+    /// The box's home: persistent per project (see `main::project_cache`).
+    pub fn home(&self) -> String {
+        format!("/home/{}", self.name)
+    }
+
     /// Runs `command` once the passwd entry exists (or after 5 s).
     pub fn wrap(&self, command: Vec<String>) -> Vec<String> {
         let mut wrapped = vec!["sh".into(), "-c".into(), WAIT.into(), "sh".into()];
@@ -32,12 +37,12 @@ impl BoxUser {
 
     /// Shell run as root inside the box: replace any entry with our name or UID, then
     /// release the wrapper. The flag is set even if /etc/passwd can't be written.
-    pub fn setup_script(&self) -> String {
+    pub fn setup_script(&self, home: &str) -> String {
         let BoxUser { name, uid, gid } = self;
         format!(
             "t=$(mktemp) && \
              grep -v -e '^{name}:' -e '^[^:]*:[^:]*:{uid}:' /etc/passwd > \"$t\"; \
-             echo '{name}:x:{uid}:{gid}::/tmp:/bin/sh' >> \"$t\" && cat \"$t\" > /etc/passwd; \
+             echo '{name}:x:{uid}:{gid}::{home}:/bin/sh' >> \"$t\" && cat \"$t\" > /etc/passwd; \
              rm -f \"$t\"; touch {READY_FLAG}"
         )
     }
@@ -90,9 +95,9 @@ mod tests {
 
     #[test]
     fn setup_replaces_entries_and_always_releases() {
-        let s = BoxUser::new(Some("cesar"), 1000, 1000).setup_script();
+        let s = BoxUser::new(Some("cesar"), 1000, 1000).setup_script("/home/cesar");
         assert!(s.contains("-e '^cesar:' -e '^[^:]*:[^:]*:1000:'"));
-        assert!(s.contains("echo 'cesar:x:1000:1000::/tmp:/bin/sh'"));
+        assert!(s.contains("echo 'cesar:x:1000:1000::/home/cesar:/bin/sh'"));
         assert!(s.ends_with(&format!("; touch {READY_FLAG}")));
     }
 

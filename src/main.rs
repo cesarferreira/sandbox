@@ -1,3 +1,4 @@
+mod agents;
 mod backend;
 mod cli;
 mod image;
@@ -129,6 +130,14 @@ fn run_box(opts: BoxOpts, command: Vec<String>) -> Result<ExitCode> {
         mounts.push(parse_mount(raw)?);
     }
 
+    let (uid, gid) = host_ids();
+    let user = BoxUser::new(std::env::var("USER").ok().as_deref(), uid, gid);
+    let cache = project_cache(&project)?;
+    // Dotfiles, agent logins and history persist per project, and never cross
+    // between projects (one project's transcripts stay out of another's box).
+    mounts.push(cache_mount(&cache, "home", user.home())?);
+
+    let agent = command.first().and_then(|c| agents::lookup(c));
     let (recipe, image_label) = match &opts.image {
         Some(image) => {
             if !opts.kit.is_empty() {
@@ -137,20 +146,37 @@ fn run_box(opts: BoxOpts, command: Vec<String>) -> Result<ExitCode> {
             (None, image.clone())
         }
         None => {
-            let kits = kits::resolve(&project.root, &opts.kit)?;
-            mounts.extend(kit_mounts(&project, &kits)?);
+            let mut kits = kits::resolve(&project.root, &opts.kit)?;
+            let mut layers = Vec::new();
+            if let Some(agent) = agent {
+                if !kits.iter().any(|k| k.name == "node") {
+                    // Node only for the agent: no node_modules/ mountpoint in a
+                    // project that has none.
+                    let mut node = kits::resolve(&project.root, &["node".into()])?;
+                    node.iter_mut().for_each(|k| k.artifacts.clear());
+                    kits.extend(node);
+                }
+                if let Some(node) = kits.iter().find(|k| k.name == "node") {
+                    agent.check_node(node)?;
+                }
+                let version = agent.version(&image::cache_dir()?.join("agents"));
+                layers.push((
+                    format!("{} {version}", agent.name),
+                    agent.dockerfile(&version),
+                ));
+            }
+            mounts.extend(kit_mounts(&cache, &kits)?);
             let label = std::iter::once("sandbox-base".to_string())
                 .chain(kits.iter().map(kits::Kit::label))
+                .chain(layers.iter().map(|(label, _)| label.clone()))
                 .collect::<Vec<_>>()
                 .join(" + ");
-            (Some(image::with_kits(&kits)), label)
+            (Some(image::with_kits(&kits, &layers)), label)
         }
     };
 
     let selection = backend::select(opts.backend.as_deref())?;
     let kind = selection.kind;
-    let (uid, gid) = host_ids();
-    let user = BoxUser::new(std::env::var("USER").ok().as_deref(), uid, gid);
     let setup_user = backend::needs_user_setup(kind);
     let mut env = box_env(std::env::vars(), opts.env);
     // Passed by name so the token reaches the box through our environment,
@@ -159,6 +185,9 @@ fn run_box(opts: BoxOpts, command: Vec<String>) -> Result<ExitCode> {
     if gh_token.is_some() {
         env.push("GH_TOKEN".into());
     }
+    // The agent's own credentials, also by name. Other secrets still need -e.
+    let agent_keys = agent.map(|a| a.present_keys()).unwrap_or_default();
+    env.extend(agent_keys.iter().map(|k| k.to_string()));
     env.splice(
         0..0,
         [
@@ -178,6 +207,7 @@ fn run_box(opts: BoxOpts, command: Vec<String>) -> Result<ExitCode> {
         ],
         mounts,
         workdir: project.workdir(),
+        home: user.home().into(),
         env,
         uid,
         gid,
@@ -215,6 +245,9 @@ fn run_box(opts: BoxOpts, command: Vec<String>) -> Result<ExitCode> {
             "sandbox: warning: network is unrestricted (--net allowlist lands in milestone 3; use --net none to cut it off)"
         );
     }
+    if !agent_keys.is_empty() {
+        eprintln!("sandbox: passing {} to the box", agent_keys.join(", "));
+    }
     if gh_token.is_some() {
         eprintln!(
             "sandbox: warning: --gh: your GitHub token is readable by anything running in the box"
@@ -241,7 +274,7 @@ fn run_box(opts: BoxOpts, command: Vec<String>) -> Result<ExitCode> {
 fn prepare_user(kind: Kind, name: &str, user: &BoxUser, child: &mut Child) -> Result<()> {
     // Generous, because the first run of an image includes pulling it.
     const MAX_ATTEMPTS: u32 = 3000;
-    let setup = backend::exec_root_args(kind, name, &user.setup_script());
+    let setup = backend::exec_root_args(kind, name, &user.setup_script(&user.home()));
     for _ in 0..MAX_ATTEMPTS {
         if child.try_wait()?.is_some() {
             return Ok(());
@@ -267,36 +300,36 @@ fn prepare_user(kind: Kind, name: &str, user: &BoxUser, child: &mut Child) -> Re
     Ok(())
 }
 
-/// Kit caches and box-only build dirs, kept on the host under
-/// ~/.cache/sandbox/projects/<project>/ so they survive between runs. Plain host
+/// Per-project state on the host: ~/.cache/sandbox/projects/<project>/. Plain host
 /// directories (not backend volumes) keep ownership right on every backend.
-fn kit_mounts(project: &Project, kits: &[kits::Kit]) -> Result<Vec<Mount>> {
-    let dir = image::cache_dir()?.join("projects").join(format!(
+fn project_cache(project: &Project) -> Result<PathBuf> {
+    Ok(image::cache_dir()?.join("projects").join(format!(
         "{}-{:06x}",
         project.slug(),
         image::short_hash(&project.root.display().to_string()) & 0xff_ffff
-    ));
+    )))
+}
+
+fn cache_mount(cache: &Path, name: &str, target: impl Into<PathBuf>) -> Result<Mount> {
+    let source = cache.join(name);
+    std::fs::create_dir_all(&source).with_context(|| format!("creating {}", source.display()))?;
+    Ok(Mount {
+        source,
+        target: target.into(),
+        readonly: false,
+    })
+}
+
+/// Kit caches and box-only build dirs, kept per project so they survive between runs.
+fn kit_mounts(cache: &Path, kits: &[kits::Kit]) -> Result<Vec<Mount>> {
     let mut mounts = Vec::new();
     for kit in kits {
-        let caches = kit
-            .caches
-            .iter()
-            .map(|(name, target)| (name.to_string(), PathBuf::from(target)));
-        let artifacts = kit.artifacts.iter().map(|rel| {
-            (
-                format!("{}-{rel}", kit.name),
-                Path::new(WORKSPACE).join(rel),
-            )
-        });
-        for (name, target) in caches.chain(artifacts) {
-            let source = dir.join(name);
-            std::fs::create_dir_all(&source)
-                .with_context(|| format!("creating {}", source.display()))?;
-            mounts.push(Mount {
-                source,
-                target,
-                readonly: false,
-            });
+        for (name, target) in &kit.caches {
+            mounts.push(cache_mount(cache, name, *target)?);
+        }
+        for rel in &kit.artifacts {
+            let name = format!("{}-{rel}", kit.name);
+            mounts.push(cache_mount(cache, &name, Path::new(WORKSPACE).join(rel))?);
         }
     }
     Ok(mounts)

@@ -26,15 +26,19 @@ pub fn base() -> Recipe {
     }
 }
 
-/// The base image plus the given kits; just the base image when there are none.
-pub fn with_kits(kits: &[Kit]) -> Recipe {
+/// The base image plus the given kits and extra labelled layers (agents); just the
+/// base image when there are none.
+pub fn with_kits(kits: &[Kit], extra: &[(String, String)]) -> Recipe {
     let base = base();
-    if kits.is_empty() {
+    if kits.is_empty() && extra.is_empty() {
         return base;
     }
     let mut dockerfile = format!("FROM {}\n", base.tag);
     for kit in kits {
         dockerfile.push_str(&format!("\n# kit: {}\n{}", kit.label(), kit.dockerfile));
+    }
+    for (label, layer) in extra {
+        dockerfile.push_str(&format!("\n# {label}\n{layer}"));
     }
     Recipe {
         tag: format!("sandbox-env:{:012x}", short_hash(&dockerfile)),
@@ -142,11 +146,11 @@ mod tests {
 
     #[test]
     fn kits_layer_on_the_base_image() {
-        assert_eq!(with_kits(&[]), base());
+        assert_eq!(with_kits(&[], &[]), base());
         let dir = std::env::temp_dir().join(format!("sandbox-image-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("Cargo.toml"), "").unwrap();
-        let recipe = with_kits(&crate::kits::detect(&dir));
+        let recipe = with_kits(&crate::kits::detect(&dir), &[]);
         assert!(recipe.tag.starts_with("sandbox-env:"));
         assert!(
             recipe

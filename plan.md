@@ -324,6 +324,8 @@ A plain Linux image lacks the project's toolchain, and the host's toolchain (mac
 | go, python (uv) | planned | |
 | iOS / Xcode | not possible in a Linux box | needs the native OS-sandbox backend (§10) |
 
+**Agent layer (done):** `sandbox claude|codex|gemini` adds the node kit if needed and installs the agent from npm on top. The version is pinned to the registry's latest and re-checked at most daily. A project pinning a too-old Node fails early. The agent's own key variables pass through by name. Agent state lives in a per-project persistent home, so one project's transcripts never reach another project's box. The credential broker (M3) will replace key passthrough.
+
 ### 7. CLI
 
 ```

@@ -108,14 +108,23 @@ sandbox shell
 (sandbox)you@box:/workspace$ cat ~/.ssh/id_ed25519   # No such file or directory
 ```
 
-**Run an agent unattended**, with its API key passed in explicitly:
+**Run a coding agent** with full autonomy, inside the box:
 
 ```bash
-sandbox -e ANTHROPIC_API_KEY run --image my-claude-image -- claude --dangerously-skip-permissions
-sandbox -e OPENAI_API_KEY codex --yolo
+sandbox claude --dangerously-skip-permissions
+sandbox codex --yolo
+sandbox gemini
 ```
 
-(Agent images come with milestone 2. Until then, use an image that has the agent installed.)
+The agent is installed into the image on first use, on top of the project's toolchain kits. It's the latest npm release, re-checked at most once a day, so agents stay current without slowing every run. The agent's own key (`ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`, `OPENAI_API_KEY`, `GEMINI_API_KEY` / `GOOGLE_API_KEY`) is passed through when it's set on your machine. Other secrets still need `-e`. If you log in inside the box instead, the login is kept in that project's home (see below).
+
+| Agent | Package | Needs |
+|---|---|---|
+| `claude` | `@anthropic-ai/claude-code` | Node 22+ |
+| `codex` | `@openai/codex` | Node 18+ |
+| `gemini` | `@google/gemini-cli` | Node 20+ |
+
+If the project pins an older Node (say `.nvmrc` = 20), `sandbox claude` stops with a clear message instead of failing inside the box.
 
 **Use `gh` with your login**: read issues, check CI, review PRs from inside the box:
 
@@ -176,6 +185,7 @@ Every run gets a new box that is removed on exit:
 - **Extra mounts are read-only.** `--mount ~/Downloads` is read-only; add `:rw` to make it writable.
 - **Ports stay local.** `-p 3000` publishes on `127.0.0.1:3000`. Pass an IP (`-p 0.0.0.0:3000:3000`) to expose it further.
 - **No host environment by default.** Only `TERM` (normalized to one the image knows), `COLORTERM` and `TZ` are passed in, plus `LANG=C.UTF-8`. Anything else, including API keys, needs an explicit `-e`.
+- **A home per project.** `~` in the box is `/home/<you>`, kept under `~/.cache/sandbox/projects/<project>/home`. Agent logins, settings, history and dotfiles survive between runs, but one project's home is never visible from another project's box.
 - **You are you.** The box runs as your UID/GID with your username (so `whoami`, prompts and file ownership match your Mac), and `sandbox shell` prompts are prefixed with `(sandbox)`. Images need `sh` for this; the entry is added just before your command starts.
 - **Exit codes pass through.** Sandbox's own errors use `125`.
 - **Backend choice.** On Apple silicon with macOS 26, Sandbox uses Apple [`container`](https://github.com/apple/container), which gives one VM per box. Otherwise it falls back to Docker, Podman or nerdctl, and prints a warning that isolation is weaker.
