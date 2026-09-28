@@ -18,7 +18,7 @@ use project::{Project, WORKSPACE};
 const DEFAULT_IMAGE: &str = "debian:bookworm-slim";
 const DEFAULT_CPUS: u32 = 4;
 const DEFAULT_MEMORY: &str = "8g";
-/// Exit code for AgentBox's own failures, following the Docker convention.
+/// Exit code for Sandbox's own failures, following the Docker convention.
 const EXIT_AGENTBOX_ERROR: u8 = 125;
 const SHELL: &str = "command -v bash >/dev/null 2>&1 && exec bash -l || exec sh -l";
 
@@ -27,7 +27,7 @@ fn main() -> ExitCode {
     match dispatch(cli) {
         Ok(code) => code,
         Err(err) => {
-            eprintln!("agentbox: {err:#}");
+            eprintln!("sandbox: {err:#}");
             ExitCode::from(EXIT_AGENTBOX_ERROR)
         }
     }
@@ -105,7 +105,7 @@ fn run_box(opts: BoxOpts, command: Vec<String>) -> Result<ExitCode> {
     let kind = selection.kind;
     let (uid, gid) = host_ids();
     let spec = RunSpec {
-        name: format!("agentbox-{}-{}", project.slug(), short_id()),
+        name: format!("sandbox-{}-{}", project.slug(), short_id()),
         image: opts.image.unwrap_or_else(|| DEFAULT_IMAGE.into()),
         labels: vec![
             (backend::LABEL.into(), "1".into()),
@@ -131,12 +131,12 @@ fn run_box(opts: BoxOpts, command: Vec<String>) -> Result<ExitCode> {
     }
 
     if let Some(warning) = &selection.warning {
-        eprintln!("agentbox: warning: {warning}");
+        eprintln!("sandbox: warning: {warning}");
     }
-    eprintln!("agentbox: {}", summary(kind, &spec));
+    eprintln!("sandbox: {}", summary(kind, &spec));
     if network == Network::Open {
         eprintln!(
-            "agentbox: warning: network is unrestricted (--net allowlist lands in milestone 3; use --net none to cut it off)"
+            "sandbox: warning: network is unrestricted (--net allowlist lands in milestone 3; use --net none to cut it off)"
         );
     }
 
@@ -168,12 +168,12 @@ fn ps(backend: Option<&str>) -> Result<ExitCode> {
     }
     let width = boxes.iter().map(|b| b.name.len()).max().unwrap_or(4).max(4);
     println!(
-        "{:width$}  {:10}  {:30}  PROJECT",
+        "{:width$}  {:14}  {:32}  PROJECT",
         "NAME", "STATUS", "IMAGE"
     );
     for b in boxes {
         println!(
-            "{:width$}  {:10}  {:30}  {}",
+            "{:width$}  {:14}  {:32}  {}",
             b.name, b.status, b.image, b.project
         );
     }
@@ -187,7 +187,7 @@ fn stop(backend: Option<&str>, name: Option<&str>, all: bool) -> Result<ExitCode
         boxes.into_iter().map(|b| b.name).collect()
     } else if let Some(name) = name {
         if !boxes.iter().any(|b| b.name == name) {
-            bail!("no running AgentBox box named `{name}` (see `agentbox ps`)");
+            bail!("no running Sandbox box named `{name}` (see `sandbox ps`)");
         }
         vec![name.to_string()]
     } else {
@@ -253,7 +253,7 @@ fn doctor() -> Result<ExitCode> {
         }
         Err(err) => {
             println!("selected   none");
-            eprintln!("agentbox: {err:#}");
+            eprintln!("sandbox: {err:#}");
             Ok(ExitCode::from(EXIT_AGENTBOX_ERROR))
         }
     }

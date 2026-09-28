@@ -49,8 +49,8 @@ run:
 
 # Quick demo
 demo: install
-	@echo "=== agentbox demo ==="
-	agentbox --help
+	@echo "=== sandbox demo ==="
+	sandbox --help
 
 # Bump version, regenerate CHANGELOG.md, tag, publish, and push (requires cargo-release + git-cliff)
 release:

@@ -4,12 +4,12 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "agentbox",
+    name = "sandbox",
     version,
     about = "Run AI coding agents in isolated, disposable sandboxes",
     allow_external_subcommands = true,
-    after_help = "Shorthand: `agentbox [OPTIONS] <AGENT> [ARGS...]` runs <AGENT> in a fresh box,\n\
-                  e.g. `agentbox codex --yolo`. Everything after <AGENT> goes to it untouched."
+    after_help = "Shorthand: `sandbox [OPTIONS] <AGENT> [ARGS...]` runs <AGENT> in a fresh box,\n\
+                  e.g. `sandbox codex --yolo`. Everything after <AGENT> goes to it untouched."
 )]
 pub struct Cli {
     #[command(flatten)]
@@ -38,7 +38,7 @@ pub enum Command {
     Exec {
         #[arg(long, value_name = "BACKEND")]
         backend: Option<String>,
-        /// Box name (see `agentbox ps`)
+        /// Box name (see `sandbox ps`)
         #[arg(name = "BOX")]
         name: String,
         #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
@@ -53,10 +53,10 @@ pub enum Command {
     Stop {
         #[arg(long, value_name = "BACKEND")]
         backend: Option<String>,
-        /// Box name (see `agentbox ps`)
+        /// Box name (see `sandbox ps`)
         #[arg(name = "BOX", conflicts_with = "all")]
         name: Option<String>,
-        /// Stop every AgentBox box (other containers are left alone)
+        /// Stop every Sandbox box (other containers are left alone)
         #[arg(long)]
         all: bool,
     },
@@ -134,7 +134,7 @@ impl BoxOpts {
 pub enum NetMode {
     /// No network at all (loopback only)
     None,
-    /// Only allowlisted hosts, through the AgentBox proxy
+    /// Only allowlisted hosts, through the Sandbox proxy
     Allowlist,
     /// Unrestricted egress
     Open,
@@ -150,7 +150,7 @@ mod tests {
 
     #[test]
     fn shorthand_passes_agent_args_through() {
-        let cli = parse(&["agentbox", "--net", "none", "codex", "--yolo", "-m", "x"]);
+        let cli = parse(&["sandbox", "--net", "none", "codex", "--yolo", "-m", "x"]);
         assert_eq!(cli.opts.net, Some(NetMode::None));
         match cli.command {
             Command::Agent(args) => assert_eq!(args, ["codex", "--yolo", "-m", "x"]),
@@ -160,7 +160,7 @@ mod tests {
 
     #[test]
     fn run_keeps_flags_after_command() {
-        let cli = parse(&["agentbox", "run", "--image", "alpine", "--", "ls", "-la"]);
+        let cli = parse(&["sandbox", "run", "--image", "alpine", "--", "ls", "-la"]);
         match cli.command {
             Command::Run { opts, command } => {
                 assert_eq!(opts.image.as_deref(), Some("alpine"));
@@ -173,11 +173,11 @@ mod tests {
     #[test]
     fn subcommand_names_are_reserved() {
         assert!(matches!(
-            parse(&["agentbox", "ps"]).command,
+            parse(&["sandbox", "ps"]).command,
             Command::Ps { .. }
         ));
         assert!(matches!(
-            parse(&["agentbox", "doctor"]).command,
+            parse(&["sandbox", "doctor"]).command,
             Command::Doctor
         ));
     }

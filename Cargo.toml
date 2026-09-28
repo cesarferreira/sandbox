@@ -1,15 +1,15 @@
 [package]
-name = "agentbox"
+name = "agent-sandbox-cli"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Run AI coding agents in isolated, disposable sandboxes"
 license = "MIT"
 authors = ["Cesar Ferreira"]
-repository = "https://github.com/cesarferreira/agentbox"
+repository = "https://github.com/cesarferreira/sandbox"
 
 [[bin]]
-name = "agentbox"
+name = "sandbox"
 path = "src/main.rs"
 
 [dependencies]

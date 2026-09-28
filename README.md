@@ -1,5 +1,5 @@
 <div align="center">
-  <h1>agentbox</h1>
+  <h1>sandbox</h1>
 
   <p><strong>Run AI coding agents in isolated, disposable sandboxes</strong></p>
 
@@ -7,7 +7,6 @@
     <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
     <img alt="Rust" src="https://img.shields.io/badge/rust-1.85%2B-orange">
     <img alt="Edition" src="https://img.shields.io/badge/edition-2024-blue">
-    <a href="https://crates.io/crates/agentbox"><img alt="crates.io" src="https://img.shields.io/crates/v/agentbox.svg"></a>
   </p>
 
   <p>
@@ -26,21 +25,23 @@
 Requires [Rust](https://rustup.rs) **1.85+** and `~/.cargo/bin` on your `PATH`.
 
 ```bash
-cargo install agentbox
+cargo install agent-sandbox-cli   # installs the `sandbox` binary
+# or, before the first crates.io release:
+cargo install --git https://github.com/cesarferreira/sandbox.git
 ```
 
 Verify:
 
 ```bash
-agentbox --help
+sandbox --help
 ```
 
 <details>
 <summary><strong>Build from source</strong> — for development or unreleased changes</summary>
 
 ```bash
-git clone https://github.com/cesarferreira/agentbox.git
-cd agentbox
+git clone https://github.com/cesarferreira/sandbox.git
+cd sandbox
 cargo install --path . --locked
 # or
 make install-release
@@ -56,7 +57,7 @@ Run without installing:
 
 ```bash
 make build-release
-./target/release/agentbox
+./target/release/sandbox
 ```
 
 </details>
@@ -66,20 +67,20 @@ make build-release
 
 ```bash
 cd my-project
-agentbox doctor                          # which backend will be used, and why
-agentbox run -- bash -lc 'ls; id'        # any command, in a fresh box
-agentbox --net none codex --yolo         # shorthand: everything after the agent goes to it
-agentbox shell                           # interactive shell in a fresh box
-agentbox ps                              # running boxes
-agentbox stop                            # stop this project's box (or: stop <name> / --all)
+sandbox doctor                          # which backend will be used, and why
+sandbox run -- bash -lc 'ls; id'        # any command, in a fresh box
+sandbox --net none codex --yolo         # shorthand: everything after the agent goes to it
+sandbox shell                           # interactive shell in a fresh box
+sandbox ps                              # running boxes
+sandbox stop                            # stop this project's box (or: stop <name> / --all)
 ```
 
 Every run gets a new box that is removed on exit:
 
 - **Only the project is visible.** The git top level is mounted at `/workspace`; nothing else from your machine exists in the box. For a git worktree, the main repo's `.git` is also mounted read-only.
 - **Files stay yours.** The box runs as your UID/GID.
-- **Exit codes pass through.** AgentBox's own errors use `125`.
-- **Backend choice.** On Apple silicon with macOS 26, AgentBox uses Apple [`container`](https://github.com/apple/container), which gives one VM per box. Otherwise it falls back to Docker, Podman or nerdctl, and prints a warning that isolation is weaker.
+- **Exit codes pass through.** Sandbox's own errors use `125`.
+- **Backend choice.** On Apple silicon with macOS 26, Sandbox uses Apple [`container`](https://github.com/apple/container), which gives one VM per box. Otherwise it falls back to Docker, Podman or nerdctl, and prints a warning that isolation is weaker.
 - **Network.** `--net none` cuts all networking. The default is currently `open`; the `allowlist` mode and the credential broker are still to come.
 
 Options: `--image`, `--net none|open`, `--mount PATH[:ro]`, `-p/--publish`, `-e/--env`, `--cpus`, `--memory`, `--backend`, `--dry-run`. See [plan.md](plan.md) for the roadmap.

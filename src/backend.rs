@@ -115,7 +115,7 @@ pub fn select(preference: Option<&str>) -> Result<Selection> {
         .map(|(k, why)| format!("  {}: {why}", k.name()))
         .collect();
     bail!(
-        "no usable isolation backend found:\n{}\nrun `agentbox doctor` for details",
+        "no usable isolation backend found:\n{}\nrun `sandbox doctor` for details",
         detail.join("\n")
     )
 }
@@ -196,8 +196,8 @@ pub struct RunSpec {
     pub command: Vec<String>,
 }
 
-pub const LABEL: &str = "agentbox";
-pub const PROJECT_LABEL: &str = "agentbox.project";
+pub const LABEL: &str = "sandbox.managed";
+pub const PROJECT_LABEL: &str = "sandbox.project";
 
 pub fn run_args(kind: Kind, spec: &RunSpec) -> Vec<String> {
     let mut a = args(&["run", "--rm", "--init", "-i", "--cap-drop", "ALL"]);
@@ -339,7 +339,13 @@ pub struct BoxInfo {
 pub fn list(kind: Kind) -> Result<Vec<BoxInfo>> {
     let args: Vec<String> = match kind {
         Kind::AppleContainer => args(&["ls", "--format", "json"]),
-        _ => args(&["ps", "--filter", "label=agentbox=1", "--format", "json"]),
+        _ => args(&[
+            "ps",
+            "--filter",
+            "label=sandbox.managed=1",
+            "--format",
+            "json",
+        ]),
     };
     let out = Command::new(kind.bin())
         .args(&args)
@@ -447,9 +453,9 @@ mod tests {
 
     fn spec() -> RunSpec {
         RunSpec {
-            name: "agentbox-repo-abc123".into(),
+            name: "sandbox-repo-abc123".into(),
             image: "debian:bookworm-slim".into(),
-            labels: vec![("agentbox".into(), "1".into())],
+            labels: vec![(LABEL.into(), "1".into())],
             mounts: vec![
                 Mount {
                     source: "/code/repo".into(),
@@ -509,7 +515,7 @@ mod tests {
         assert!(has_pair(&a, "-v", "/code/main/.git:/code/main/.git:ro"));
         assert!(has_pair(&a, "--security-opt", "no-new-privileges"));
         assert!(has_pair(&a, "--memory", "8192m"));
-        assert!(has_pair(&a, "--label", "agentbox=1"));
+        assert!(has_pair(&a, "--label", "sandbox.managed=1"));
     }
 
     #[test]
@@ -542,7 +548,7 @@ mod tests {
     #[test]
     fn parses_apple_list_and_skips_foreign_containers() {
         let json = r#"[
-          {"configuration":{"id":"agentbox-repo-1","labels":{"agentbox":"1","agentbox.project":"/code/repo"},
+          {"configuration":{"id":"sandbox-repo-1","labels":{"sandbox.managed":"1","sandbox.project":"/code/repo"},
             "image":{"reference":"docker.io/library/alpine:latest"}},"status":{"state":"running"}},
           {"configuration":{"id":"postgres","labels":{},"image":{"reference":"postgres"}},"status":{"state":"running"}}
         ]"#;
@@ -550,7 +556,7 @@ mod tests {
         assert_eq!(
             boxes,
             [BoxInfo {
-                name: "agentbox-repo-1".into(),
+                name: "sandbox-repo-1".into(),
                 project: "/code/repo".into(),
                 image: "docker.io/library/alpine:latest".into(),
                 status: "running".into(),
@@ -560,12 +566,12 @@ mod tests {
 
     #[test]
     fn parses_docker_lines_and_podman_arrays() {
-        let docker = r#"{"Names":"agentbox-a","Labels":"agentbox=1,agentbox.project=/p","Image":"alpine","Status":"Up 2 minutes"}"#;
-        let podman = r#"[{"Names":["agentbox-b"],"Labels":{"agentbox":"1","agentbox.project":"/q"},"Image":"alpine","Status":"running"}]"#;
+        let docker = r#"{"Names":"sandbox-a","Labels":"sandbox.managed=1,sandbox.project=/p","Image":"alpine","Status":"Up 2 minutes"}"#;
+        let podman = r#"[{"Names":["sandbox-b"],"Labels":{"sandbox.managed":"1","sandbox.project":"/q"},"Image":"alpine","Status":"running"}]"#;
         assert_eq!(parse_list(Kind::Docker, docker).unwrap()[0].project, "/p");
         assert_eq!(
             parse_list(Kind::Podman, podman).unwrap()[0].name,
-            "agentbox-b"
+            "sandbox-b"
         );
         assert!(parse_list(Kind::Docker, "").unwrap().is_empty());
     }

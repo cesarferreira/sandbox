@@ -9,7 +9,7 @@ pub const WORKSPACE: &str = "/workspace";
 pub struct Project {
     /// Directory mounted at /workspace: the git top level, or the cwd outside git.
     pub root: PathBuf,
-    /// Where the user invoked agentbox, inside `root`.
+    /// Where the user invoked sandbox, inside `root`.
     pub cwd: PathBuf,
     /// Shared git dir of a worktree, when it lives outside `root`.
     pub external_git_dir: Option<PathBuf>,

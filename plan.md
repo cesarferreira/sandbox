@@ -1,4 +1,4 @@
-# AgentBox — Revised Plan
+# Sandbox — Revised Plan
 
 Version: 0.2 (revision of PRD 0.1)
 Author: Cesar Ferreira
@@ -10,9 +10,9 @@ Status: Draft
 
 ### What v0.1 gets right (kept)
 
-- **It works with any agent.** The agent is just a command, and AgentBox doesn't care which one.
+- **It works with any agent.** The agent is just a command, and Sandbox doesn't care which one.
 - **Disposable by default.** Every run starts clean.
-- **One command, no setup.** Prefixing a normal command with `agentbox` is the right UX.
+- **One command, no setup.** Prefixing a normal command with `sandbox` is the right UX.
 - **The permission manifest as the signature feature.** This is the best idea in the draft. v0.2 builds the product around it, with one rule: every line in it must be enforced by something.
 
 ### Holes, in order of severity
@@ -38,7 +38,7 @@ Status: Draft
    **Fix:** mount the obvious host-executed paths read-only (`.git/hooks`, `.git/config`, `.envrc`, `.vscode`, `.idea`). Add a **review mode**, where the agent works on a copy and changes come back as a branch or diff, and flag any change to a build or script file in the post-run report.
 
 4. **Secrets inside the project are exposed by default.** `.env`, `local.properties`, `google-services.json`, `*.keystore` and `terraform.tfstate` all live inside "just the project".
-   **Fix:** add an `.agentboxignore` (with sensible defaults) that masks these paths with empty files or tmpfs.
+   **Fix:** add an `.sandboxignore` (with sensible defaults) that masks these paths with empty files or tmpfs.
 
 5. **Some manifest permissions can't be enforced.**
    - `git.push: false` can't be enforced while the box has network access and a token; the agent can call `git push` or `curl` the GitHub API directly. The only honest version is "no push credential is given to the box, and the host pushes after you review".
@@ -48,14 +48,14 @@ Status: Draft
    A permission you can't enforce is **security theater**, and it undermines the signature feature.
    **Fix:** the manifest may only contain permissions that map to a concrete enforcement mechanism (see Part 2 §5).
 
-6. **A manifest committed to the repo is an attack vector.** If `agentbox.yaml` lives in the repo, a malicious repo can ship one that asks for `~/.ssh` plus the open internet, and a user tired of prompts presses Y.
+6. **A manifest committed to the repo is an attack vector.** If `sandbox.yaml` lives in the repo, a malicious repo can ship one that asks for `~/.ssh` plus the open internet, and a user tired of prompts presses Y.
    **Fix:** a repo manifest is only a *request*. The user's global policy caps what it can get. Approvals are stored per project, keyed by a hash of the manifest, and you're asked again only when the manifest changes. This also fixes the prompt fatigue v0.1 would cause by asking on every launch.
 
 7. **The example config contradicts "secure by default".** `mount_gitconfig = true` breaks "nothing is mounted except the project". A `~/.gitconfig` can carry credential helpers, `url.insteadOf` rules with embedded tokens, and `includeIf` paths.
    **Fix:** generate a minimal gitconfig in the box that only sets `user.name` and `user.email`. Also, v0.1 uses two config formats (TOML for config, YAML for the manifest); pick one.
 
 8. **Shared caches can be poisoned.** Mounting the host's `~/.npm`, `~/.cargo` or `~/.gradle` means a malicious postinstall script in project A can poison a cache that project B, *or your host*, later uses.
-   **Fix:** use caches that AgentBox manages as named volumes, never the host's caches, and allow scoping them per project.
+   **Fix:** use caches that Sandbox manages as named volumes, never the host's caches, and allow scoping them per project.
 
 9. **There are no resource limits.** Nothing caps CPU, memory, pids, disk, or run time, so a fork bomb or runaway `cargo build` still hurts the host.
 
@@ -72,11 +72,11 @@ Status: Draft
     - **Apple `container`** is the preferred macOS backend: one VM per box, no daemon, no socket, stable since 1.0 (June 2026).
     - **Docker-compatible CLI** (Docker Desktop, OrbStack, Colima, Podman) covers Linux, plus Macs that can't run Apple `container`.
 
-    AgentBox must never mount the docker socket.
+    Sandbox must never mount the docker socket.
 
 13. **The CLI grammar is ambiguous.**
-    - `agentbox codex --yolo` collides with the subcommands: is `agentbox list` an agent called `list`?
-    - `agentbox stop` doesn't say *which* box when several are running.
+    - `sandbox codex --yolo` collides with the subcommands: is `sandbox list` an agent called `list`?
+    - `sandbox stop` doesn't say *which* box when several are running.
     - `--network localhost` could mean the host's localhost (reaching your dev DB) or the container's.
     - The draft doesn't cover exit code and signal propagation, TTY resize, port forwarding for dev servers the agent starts, or image paste.
 
@@ -93,7 +93,7 @@ Status: Draft
     - **Dagger container-use**: containerized worktrees per agent over MCP, with git-branch review.
     - **Anthropic sandbox-runtime (`srt`)**: an OS-level sandbox (Seatbelt / bubblewrap) plus a network-filtering proxy, with no container.
     - **Built-in agent sandboxes**: Codex and Claude Code both ship their own.
-    - **The name**: `agentbox` is already used by at least one GitHub project (zurfyx/agentbox).
+    - **The name**: the CLI is `sandbox`, published as the crate `agent-sandbox-cli` (`sandbox` and `agent-sandbox` are both taken on crates.io). The word is generic (Docker Sandboxes, Apple's App Sandbox, `sandbox-exec`).
 
     The plan needs a "why this instead of those" section (Part 2 §2).
 
@@ -107,14 +107,14 @@ Unchanged from v0.1: **Run any AI coding agent with full autonomy, and know exac
 
 ```bash
 cd my-project
-agentbox codex --yolo
+sandbox codex --yolo
 ```
 
 The trust question moves from *"Can I trust this model?"* to *"What does this box allow?"*, and the answer is a short, human-readable manifest that the system actually enforces.
 
 ### 2. Positioning (why this, not the alternatives)
 
-| | Docker Sandboxes | container-use | sandbox-runtime | Agent built-in sandboxes | **AgentBox** |
+| | Docker Sandboxes | container-use | sandbox-runtime | Agent built-in sandboxes | **Sandbox** |
 |---|---|---|---|---|---|
 | Works with any agent | several | MCP agents | yes | one agent each | **yes** |
 | Enforced, reviewable manifest | partial (network lists) | no | config file | per agent | **headline feature** |
@@ -123,11 +123,11 @@ The trust question moves from *"Can I trust this model?"* to *"What does this bo
 | Post-run report | ? | git diff | no | no | **yes** |
 | Open, local, vendor-neutral | Docker product | yes | yes | n/a | **yes** |
 
-"?" means not verified yet; filling these in is a **Milestone 0** task. If Docker Sandboxes already covers most of the AgentBox column, the right move might be a policy and manifest layer *on top of* existing sandboxes instead of a new runtime. Decide this before writing code.
+"?" means not verified yet; filling these in is a **Milestone 0** task. If Docker Sandboxes already covers most of the Sandbox column, the right move might be a policy and manifest layer *on top of* existing sandboxes instead of a new runtime. Decide this before writing code.
 
 ### 3. Threat model
 
-**In scope (AgentBox defends against):**
+**In scope (Sandbox defends against):**
 - *Agent error*: destructive commands, dependency pollution, runaway processes.
 - *Prompt injection*: an agent steered by untrusted content in the repo, its dependencies, or the web, trying to:
   - read data outside the project;
@@ -157,9 +157,9 @@ The same format (TOML) is used at three levels:
 
 | Level | Location | Role |
 |---|---|---|
-| Global policy | `~/.config/agentbox/policy.toml` | **Caps**: the most any project can get |
-| Project request | `<repo>/.agentbox.toml` (committed) | **Request**: what this project asks for |
-| Approval record | `~/.local/share/agentbox/approvals/<project-hash>.toml` | What the user approved, keyed by manifest hash |
+| Global policy | `~/.config/sandbox/policy.toml` | **Caps**: the most any project can get |
+| Project request | `<repo>/.sandbox.toml` (committed) | **Request**: what this project asks for |
+| Approval record | `~/.local/share/sandbox/approvals/<project-hash>.toml` | What the user approved, keyed by manifest hash |
 
 The effective permissions are `min(request, policy)` plus any CLI flags. The user is asked on the first run and again only when the effective permissions change.
 
@@ -199,15 +199,15 @@ timeout  = "4h"
 |---|---|
 | `filesystem.project`, `protect`, `extra` | bind-mount flags (rw/ro); `review` mode uses a copy or worktree |
 | `filesystem.mask` | tmpfs or empty-file overlay mounts |
-| `network.mode` / `allow` | the box has no direct route out; all egress goes through the AgentBox proxy (HTTP CONNECT/SNI allowlist) |
+| `network.mode` / `allow` | the box has no direct route out; all egress goes through the Sandbox proxy (HTTP CONNECT/SNI allowlist) |
 | `credentials.*` | the broker injects headers for the matching host; the box holds only a placeholder |
 | `git.push` | no push credential enters the box |
-| `resources.*` | container runtime limits plus an AgentBox watchdog |
+| `resources.*` | container runtime limits plus a Sandbox watchdog |
 
 What the user sees at launch (first run, or when the manifest changed):
 
 ```
-Launching codex in AgentBox  (backend: apple-container, image: agentbox/codex:node20)
+Launching codex in Sandbox  (backend: apple-container, image: sandbox/codex:node20)
 
 Filesystem
   ✓ read/write   ~/code/my-project
@@ -229,14 +229,14 @@ Limits   4 CPU · 8 GB · 4h
 Approve for this project? [Y/n/details]
 ```
 
-On later runs, a single line: `agentbox: using approved policy for my-project (codex, allowlist, 2 hosts)`.
+On later runs, a single line: `sandbox: using approved policy for my-project (codex, allowlist, 2 hosts)`.
 
 ### 6. Architecture
 
 ```
 ┌──────────────────────── Host ─────────────────────────┐
 │                                                        │
-│  agentbox CLI                                          │
+│  sandbox CLI                                          │
 │   ├── policy engine     (request ∩ policy → approved)  │
 │   ├── agent registry    (profiles: install, auth, env) │
 │   ├── image builder     (base → toolchain → agent)     │
@@ -271,14 +271,14 @@ On later runs, a single line: `agentbox: using approved policy for my-project (c
     2. on macOS, `apple-container` if it's installed on Apple silicon with macOS ≥ 26;
     3. the first Docker-compatible CLI found.
 
-    The chosen backend is always printed. On a macOS fallback, AgentBox also prints why (for example "macOS 15: Apple container networking unavailable") and that isolation is weaker.
+    The chosen backend is always printed. On a macOS fallback, Sandbox also prints why (for example "macOS 15: Apple container networking unavailable") and that isolation is weaker.
   - **Validate early (M0 spike).** Before committing to the `apple-container` driver, check three things (see §11):
     - that it can enforce "the only way out is the proxy";
     - bind-mount I/O speed;
     - how long a warm start takes.
-- **Network isolation.** The box is attached to an *internal* network with no default route. Its only way out is the AgentBox proxy (a sidecar container or a host process), so `HTTPS_PROXY` is a convenience rather than the enforcement: tools that ignore it simply fail.
+- **Network isolation.** The box is attached to an *internal* network with no default route. Its only way out is the Sandbox proxy (a sidecar container or a host process), so `HTTPS_PROXY` is a convenience rather than the enforcement: tools that ignore it simply fail.
 - **Credential broker.** Credentials are stored in the OS keychain (macOS Keychain, or libsecret on Linux).
-  - The proxy does the TLS for allowlisted API hosts that need credentials and injects the auth header. Doing this means the box has to trust an AgentBox CA; *open question*.
+  - The proxy does the TLS for allowlisted API hosts that need credentials and injects the auth header. Doing this means the box has to trust a Sandbox CA; *open question*.
   - Everything else passes through as SNI-filtered CONNECT.
 - **Agent profiles.** TOML files, built in and user-extensible, for example:
   ```toml
@@ -292,34 +292,34 @@ On later runs, a single line: `agentbox: using approved policy for my-project (c
   ```
 - **Image builder.** Images are built in three layers:
   1. **base**: a Debian-slim image with git, curl, a shell and common tools;
-  2. **toolchain**: detected from the project, in this order: `.agentbox.toml` image or Dockerfile → `.devcontainer/devcontainer.json` → `mise.toml` / `.tool-versions` → nothing;
+  2. **toolchain**: detected from the project, in this order: `.sandbox.toml` image or Dockerfile → `.devcontainer/devcontainer.json` → `mise.toml` / `.tool-versions` → nothing;
   3. **agent**: the agent profile's install step.
 
   Layers are content-addressed and cached. `--image` overrides everything.
 - **Workspace modes.**
   - `rw` (default): bind mount with protects and masks.
-  - `review`: `git worktree add` into a temp directory. Only that worktree and the common git dir (read-only) are mounted. At the end, AgentBox shows a diffstat and asks to keep the branch or discard it.
+  - `review`: `git worktree add` into a temp directory. Only that worktree and the common git dir (read-only) are mounted. At the end, Sandbox shows a diffstat and asks to keep the branch or discard it.
 - **Artifact isolation.** `node_modules`, `target`, `.venv`, `build` and `.gradle` are placed on named volumes in the container, based on the detected project type. The container runs as the host's UID/GID.
-- **Reporter.** Writes a run record to `~/.local/share/agentbox/runs/<id>/`: the approved manifest, the command, timing, exit code, the egress log (allowed and blocked), and a git diffstat. Files are mode `0600`.
+- **Reporter.** Writes a run record to `~/.local/share/sandbox/runs/<id>/`: the approved manifest, the command, timing, exit code, the egress log (allowed and blocked), and a git diffstat. Files are mode `0600`.
 
 ### 7. CLI
 
 ```
-agentbox [OPTIONS] <AGENT> [AGENT_ARGS...]   # shorthand; everything after <AGENT> goes to the agent untouched
-agentbox run [OPTIONS] <AGENT|--> [ARGS...]  # explicit form; `--` runs an arbitrary command
-agentbox shell [--agent <name>]              # interactive shell in a fresh box with the same policy
-agentbox exec <BOX> <CMD...>                 # run a command in a box that is already running
-agentbox ps                                  # list running boxes (id, agent, project, uptime)
-agentbox stop [<BOX>|--all]                  # with no argument: the box for this project, or an error if there are several
-agentbox policy [show|edit|approve|revoke]   # inspect and manage the manifest and approvals
-agentbox report [<RUN>]                      # post-run report (default: the last run)
-agentbox login <AGENT>                       # store the agent's credential in the keychain for the broker
-agentbox doctor                              # backend, proxy, keychain, and image cache health
-agentbox clean [--images|--caches|--state]   # clean up, scoped by what you name
+sandbox [OPTIONS] <AGENT> [AGENT_ARGS...]   # shorthand; everything after <AGENT> goes to the agent untouched
+sandbox run [OPTIONS] <AGENT|--> [ARGS...]  # explicit form; `--` runs an arbitrary command
+sandbox shell [--agent <name>]              # interactive shell in a fresh box with the same policy
+sandbox exec <BOX> <CMD...>                 # run a command in a box that is already running
+sandbox ps                                  # list running boxes (id, agent, project, uptime)
+sandbox stop [<BOX>|--all]                  # with no argument: the box for this project, or an error if there are several
+sandbox policy [show|edit|approve|revoke]   # inspect and manage the manifest and approvals
+sandbox report [<RUN>]                      # post-run report (default: the last run)
+sandbox login <AGENT>                       # store the agent's credential in the keychain for the broker
+sandbox doctor                              # backend, proxy, keychain, and image cache health
+sandbox clean [--images|--caches|--state]   # clean up, scoped by what you name
 ```
 
 - **Reserved names:** `run shell exec ps stop policy report login doctor clean help`. An agent profile can't use any of these.
-- **Exit code:** AgentBox exits with the agent's exit code. It uses 125–127 for its own errors, following the Docker convention.
+- **Exit code:** Sandbox exits with the agent's exit code. It uses 125–127 for its own errors, following the Docker convention.
 - **Signals and terminal:** signals, TTY resize and raw mode pass through to the agent.
 - **Common options:**
   - `--net none|allowlist|open`, `--allow <host>`;
@@ -350,8 +350,8 @@ agentbox clean [--images|--caches|--state]   # clean up, scoped by what you name
 | # | Milestone | Exit criteria |
 |---|---|---|
 | 0 | **Validate** | The competitor matrix (§2) is filled in from hands-on trials of Docker Sandboxes, container-use and srt. A written go / pivot decision. A name check. An Apple `container` spike on macOS 26 answers three things: whether an internal network with egress only through the proxy works, bind-mount I/O on a `node_modules`-heavy build, and whether a warm start takes under 3 s. |
-| 1 | **Walking skeleton** | `agentbox run -- bash` works on macOS (`apple-container`) and Linux (`docker`), behind one driver trait: project mounted, UID mapping, TTY and exit code pass through, the box is removed afterwards. |
-| 2 | **Agents** | Profiles and a layered image build. `agentbox claude` and `agentbox codex` work end to end, with persistent state and the key passed by env (temporarily). |
+| 1 | **Walking skeleton** | `sandbox run -- bash` works on macOS (`apple-container`) and Linux (`docker`), behind one driver trait: project mounted, UID mapping, TTY and exit code pass through, the box is removed afterwards. |
+| 2 | **Agents** | Profiles and a layered image build. `sandbox claude` and `sandbox codex` work end to end, with persistent state and the key passed by env (temporarily). |
 | 3 | **Network and broker** | Internal network plus the proxy, the allowlist, and the egress log. The key moves to the keychain and broker, and a test proves it is absent from the box's env and filesystem. |
 | 4 | **Manifest** | The policy, request and approval model; the launch prompt; protects and masks; resource limits; `--dry-run`. |
 | 5 | **Report and polish** | The post-run report, `doctor`, `clean`, artifact volumes, `devcontainer.json` toolchains, docs. |
@@ -372,13 +372,13 @@ agentbox clean [--images|--caches|--state]   # clean up, scoped by what you name
 - **Native OS-sandbox backend** (Seatbelt / Landlock / bubblewrap, as in srt). It keeps the host toolchain but gives weaker isolation; it could be the "light" tier.
 - **Scoped short-lived GitHub tokens** through the broker, and a host-side "push after review" command.
 - **Full session replay** (TTY recording plus the egress log).
-- **Snapshots**, `agentbox top` TUI, GUI, VS Code extension.
+- **Snapshots**, `sandbox top` TUI, GUI, VS Code extension.
 - **Export/import** of a reproducible box spec. This is mostly free, since it is the manifest plus the image digest.
 - **Org-managed policies**: a company-wide `policy.toml` distributed by MDM.
 
 ### 11. Open questions
 
-1. **Build, pivot or layer?** If Docker Sandboxes already covers most of this, is AgentBox better as the manifest, policy and report layer running *on* existing sandboxes? This is decided in M0.
+1. **Build, pivot or layer?** If Docker Sandboxes already covers most of this, is Sandbox better as the manifest, policy and report layer running *on* existing sandboxes? This is decided in M0.
 2. **Containers or OS sandbox as the default on macOS?**
    - Containers give strong isolation, but they need a Linux toolchain in the image and bind-mount I/O is slower.
    - Seatbelt keeps the host toolchain and adds no I/O cost, but `sandbox-exec` is deprecated and the boundary is weaker.
@@ -390,13 +390,13 @@ agentbox clean [--images|--caches|--state]   # clean up, scoped by what you name
      - firewall rules inside the box's VM, as a last resort, because root in the box could undo them.
    - If none works cleanly, the fallback is `docker` on macOS for `allowlist` mode, and `apple-container` only for `none` and `open`.
    - Also check which resource limits it supports (pids and disk in particular) and how to map the host UID/GID.
-4. **TLS interception for header injection.** The box must trust an AgentBox CA, and some agents pin certificates or ship their own CA bundles.
+4. **TLS interception for header injection.** The box must trust a Sandbox CA, and some agents pin certificates or ship their own CA bundles.
    - Alternative: the box gets a placeholder key, and the proxy swaps it for the real one on the way out.
    - Either way the proxy must read the request. Test each agent early (M3).
 5. **Subscription or OAuth logins** (a Claude Pro/Max login, ChatGPT sign-in for Codex). Can the broker hold those refresh tokens, or do we allow an "env" mode with a clear warning?
 6. **Network mode for web-research agents.** Agents that fetch docs or search the web need broad egress. Should there be a read-only "open with log" mode, and how is it labeled so users don't treat it as safe?
 7. **Default workspace mode:** `rw` (lower friction) or `review` (safer)? *Recommendation:* `rw` with protects in the MVP; revisit once review mode exists.
-8. **Name.** `agentbox` is taken on GitHub. Check crates.io, Homebrew and npm before investing in the brand.
+8. **Distribution name.** The crate is `agent-sandbox-cli` and the binary is `sandbox`. Check that `sandbox` doesn't clash in Homebrew or with other tools on users' `PATH`.
 
 ### 12. Success metrics
 
