@@ -77,13 +77,16 @@ sandbox stop                            # stop this project's box (or: stop <nam
 
 Every run gets a new box that is removed on exit:
 
-- **Only the project is visible.** The git top level is mounted at `/workspace`; nothing else from your machine exists in the box. For a git worktree, the main repo's `.git` is also mounted read-only.
-- **Files stay yours.** The box runs as your UID/GID.
+- **Only the project is visible.** The git top level is mounted read-write at `/workspace`, except `.git`, which is read-only: hooks and git config run on your machine, so the box must not be able to change them. For a git worktree, the main repo's `.git` is also mounted read-only. Nothing else from your machine exists in the box.
+- **Extra mounts are read-only.** `--mount ~/Downloads` is read-only; add `:rw` to make it writable.
+- **Ports stay local.** `-p 3000` publishes on `127.0.0.1:3000`. Pass an IP (`-p 0.0.0.0:3000:3000`) to expose it further.
+- **No host environment by default.** Only `TERM` (normalized to one the image knows), `COLORTERM` and `TZ` are passed in, plus `LANG=C.UTF-8`. Anything else, including API keys, needs an explicit `-e`.
+- **You are you.** The box runs as your UID/GID with your username (so `whoami`, prompts and file ownership match your Mac), and `sandbox shell` prompts are prefixed with `(sandbox)`. Images need `sh` for this; the entry is added just before your command starts.
 - **Exit codes pass through.** Sandbox's own errors use `125`.
 - **Backend choice.** On Apple silicon with macOS 26, Sandbox uses Apple [`container`](https://github.com/apple/container), which gives one VM per box. Otherwise it falls back to Docker, Podman or nerdctl, and prints a warning that isolation is weaker.
 - **Network.** `--net none` cuts all networking. The default is currently `open`; the `allowlist` mode and the credential broker are still to come.
 
-Options: `--image`, `--net none|open`, `--mount PATH[:ro]`, `-p/--publish`, `-e/--env`, `--cpus`, `--memory`, `--backend`, `--dry-run`. See [plan.md](plan.md) for the roadmap.
+Options: `--image`, `--net none|open`, `--mount PATH[:rw]`, `-p/--publish`, `-e/--env`, `--cpus`, `--memory`, `--backend`, `--dry-run`. See [plan.md](plan.md) for the roadmap.
 
 <a id="development"></a>
 ## Development

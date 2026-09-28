@@ -166,7 +166,7 @@ The effective permissions are `min(request, policy)` plus any CLI flags. The use
 ```toml
 [filesystem]
 project = "rw"                     # "rw" | "ro" | "review" (copy; changes returned as a branch)
-protect = [".git/hooks", ".git/config", ".envrc", ".vscode", ".idea"]   # read-only in the box
+protect = [".git", ".envrc", ".vscode", ".idea"]   # read-only in the box
 mask    = [".env*", "*.keystore", "local.properties", "*.tfstate"]     # appear as empty
 extra   = []                       # e.g. ["~/Downloads:ro"]; each entry is shown in the prompt
 

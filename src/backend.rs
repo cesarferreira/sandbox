@@ -272,6 +272,7 @@ pub fn exec_args(
     tty: bool,
     uid: u32,
     gid: u32,
+    env: &[String],
     cmd: &[String],
 ) -> Vec<String> {
     let mut a = args(&["exec", "-i"]);
@@ -288,9 +289,28 @@ pub fn exec_args(
         Kind::Podman => {}
         Kind::Docker | Kind::Nerdctl => a.extend(["--user".into(), format!("{uid}:{gid}")]),
     }
+    for e in env {
+        a.extend(["-e".into(), e.clone()]);
+    }
     a.push(name.into());
     a.extend(cmd.iter().cloned());
     a
+}
+
+/// `exec` as root, used to prepare the box before its command is released.
+pub fn exec_root_args(kind: Kind, name: &str, script: &str) -> Vec<String> {
+    let mut a = args(&["exec"]);
+    match kind {
+        Kind::AppleContainer => a.extend(args(&["--uid", "0", "--gid", "0"])),
+        _ => a.extend(args(&["--user", "0:0"])),
+    }
+    a.extend([name.into(), "sh".into(), "-c".into(), script.into()]);
+    a
+}
+
+/// Podman's `--userns=keep-id` already adds the host user to /etc/passwd.
+pub fn needs_user_setup(kind: Kind) -> bool {
+    kind != Kind::Podman
 }
 
 fn args(items: &[&str]) -> Vec<String> {
@@ -523,6 +543,18 @@ mod tests {
         let a = run_args(Kind::Podman, &spec());
         assert!(a.contains(&"--userns=keep-id".to_string()));
         assert!(!a.contains(&"--user".to_string()));
+    }
+
+    #[test]
+    fn root_exec_per_backend() {
+        let apple = exec_root_args(Kind::AppleContainer, "b", "true");
+        assert_eq!(
+            apple,
+            ["exec", "--uid", "0", "--gid", "0", "b", "sh", "-c", "true"]
+        );
+        let docker = exec_root_args(Kind::Docker, "b", "true");
+        assert_eq!(docker, ["exec", "--user", "0:0", "b", "sh", "-c", "true"]);
+        assert!(!needs_user_setup(Kind::Podman));
     }
 
     #[test]

@@ -88,15 +88,16 @@ pub struct BoxOpts {
     #[arg(long, value_enum)]
     pub net: Option<NetMode>,
 
-    /// Extra host path to mount at the same path, e.g. ~/Downloads:ro
-    #[arg(long, value_name = "PATH[:ro]")]
+    /// Extra host path to mount at the same path; read-only unless suffixed with :rw
+    #[arg(long, value_name = "PATH[:rw]")]
     pub mount: Vec<String>,
 
-    /// Publish a box port to the host, e.g. 3000:3000
+    /// Publish a box port on the host's 127.0.0.1: PORT, HOST:BOX, or IP:HOST:BOX to bind elsewhere
     #[arg(long, short = 'p', value_name = "SPEC")]
     pub publish: Vec<String>,
 
-    /// Set an environment variable in the box (KEY=VALUE, or KEY to copy from host)
+    /// Set an environment variable in the box (KEY=VALUE, or KEY to copy from host).
+    /// Only TERM, COLORTERM and TZ are passed through otherwise
     #[arg(long, short = 'e', value_name = "KEY[=VALUE]")]
     pub env: Vec<String>,
 
