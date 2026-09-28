@@ -5,7 +5,7 @@ use std::path::Path;
 
 use anyhow::{Result, bail};
 
-pub const KIT_NAMES: [&str; 1] = ["rust"];
+pub const KIT_NAMES: [&str; 2] = ["rust", "node"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Kit {
@@ -42,13 +42,19 @@ pub fn resolve(root: &Path, requested: &[String]) -> Result<Vec<Kit>> {
     for name in requested {
         match name.as_str() {
             "rust" => kits.push(rust(root)),
+            "node" => kits.push(node(root)),
             other => bail!(
                 "unknown kit `{other}` (available: {}, or none)",
                 KIT_NAMES.join(", ")
             ),
         }
     }
-    kits.dedup_by_key(|k| k.name);
+    let mut seen = Vec::new();
+    kits.retain(|k| {
+        let first = !seen.contains(&k.name);
+        seen.push(k.name);
+        first
+    });
     Ok(kits)
 }
 
@@ -56,6 +62,9 @@ pub fn detect(root: &Path) -> Vec<Kit> {
     let mut kits = Vec::new();
     if root.join("Cargo.toml").is_file() {
         kits.push(rust(root));
+    }
+    if root.join("package.json").is_file() {
+        kits.push(node(root));
     }
     kits
 }
@@ -101,6 +110,101 @@ fn rust(root: &Path) -> Kit {
         ],
         artifacts: vec!["target"],
     }
+}
+
+/// Installs Node from nodejs.org. `{select}` is a jq filter over the release index
+/// that yields the version; the tarball is verified against the release's
+/// SHASUMS256.txt before it's unpacked.
+const NODE_DOCKERFILE: &str = r#"ENV NPM_CONFIG_CACHE=/var/cache/sandbox/npm \
+    npm_config_store_dir=/var/cache/sandbox/pnpm \
+    YARN_CACHE_FOLDER=/var/cache/sandbox/yarn \
+    COREPACK_HOME=/var/cache/sandbox/corepack \
+    COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+RUN set -eu; \
+    v=$(curl -fsSL https://nodejs.org/dist/index.json | jq -r '{select}'); \
+    if [ -z "$v" ] || [ "$v" = null ]; then echo "no Node release matches {version}" >&2; exit 1; fi; \
+    arch=$(dpkg --print-architecture | sed 's/amd64/x64/'); \
+    f="node-$v-linux-$arch.tar.xz"; \
+    cd /tmp; \
+    curl -fsSLO "https://nodejs.org/dist/$v/$f"; \
+    curl -fsSLO "https://nodejs.org/dist/$v/SHASUMS256.txt"; \
+    grep " $f\$" SHASUMS256.txt | sha256sum -c -; \
+    tar -xJf "$f" -C /usr/local --strip-components=1 --no-same-owner; \
+    rm -f "$f" SHASUMS256.txt; \
+    corepack enable 2>/dev/null || true; \
+    mkdir -p /var/cache/sandbox; \
+    chmod -R a+rwX /usr/local/lib/node_modules /usr/local/bin /var/cache/sandbox
+"#;
+
+fn node(root: &Path) -> Kit {
+    let version = node_version(root).unwrap_or_else(|| "lts".into());
+    // The pin is "lts", a major ("22") or an exact version ("22.11.0").
+    let select = match version.as_str() {
+        "lts" => "[.[] | select(.lts)][0].version".to_string(),
+        v if v.contains('.') => format!("\"v{v}\""),
+        major => format!("[.[] | select(.version | startswith(\"v{major}.\"))][0].version"),
+    };
+    let dockerfile = NODE_DOCKERFILE
+        .replace("{select}", &select)
+        .replace("{version}", &version);
+    Kit {
+        name: "node",
+        version,
+        dockerfile,
+        caches: vec![
+            ("npm-cache", "/var/cache/sandbox/npm"),
+            ("pnpm-store", "/var/cache/sandbox/pnpm"),
+            ("yarn-cache", "/var/cache/sandbox/yarn"),
+            ("corepack", "/var/cache/sandbox/corepack"),
+        ],
+        artifacts: vec!["node_modules"],
+    }
+}
+
+/// The project's Node pin: `.nvmrc`, `.node-version`, `.tool-versions`, then
+/// `engines.node` in package.json. Returns "lts", a major, or an exact version.
+fn node_version(root: &Path) -> Option<String> {
+    let read = |name: &str| std::fs::read_to_string(root.join(name)).ok();
+    let from_file = read(".nvmrc")
+        .or_else(|| read(".node-version"))
+        .and_then(|t| t.lines().next().map(str::to_string))
+        .or_else(|| {
+            read(".tool-versions")?
+                .lines()
+                .find_map(|l| {
+                    l.strip_prefix("nodejs ")
+                        .or_else(|| l.strip_prefix("node "))
+                })
+                .map(str::to_string)
+        });
+    if let Some(v) = from_file {
+        return normalize_node_version(&v);
+    }
+    let pkg: serde_json::Value = serde_json::from_str(&read("package.json")?).ok()?;
+    normalize_node_version(pkg["engines"]["node"].as_str()?)
+}
+
+/// Maps the many ways projects spell a Node version onto what the kit installs.
+/// Ranges like ">=20" or "^20.1" install the newest release of their lowest major.
+fn normalize_node_version(raw: &str) -> Option<String> {
+    let v = raw.trim().trim_start_matches('v');
+    if v.is_empty() || v.starts_with("lts") || v == "node" || v == "latest" || v == "*" {
+        return Some("lts".into());
+    }
+    let exact = v.split('.').count() == 3 && v.split('.').all(|p| p.parse::<u32>().is_ok());
+    if exact {
+        return Some(v.to_string());
+    }
+    let major: String = v
+        .trim_start_matches(|c: char| !c.is_ascii_digit())
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    major
+        .parse::<u32>()
+        .ok()
+        .filter(|m| *m > 0)
+        .map(|m| m.to_string())
 }
 
 /// Reads `rust-toolchain.toml`, or the legacy `rust-toolchain` file holding just a channel.
@@ -221,6 +325,51 @@ mod tests {
         );
         assert_eq!(pin.channel, None);
         assert_eq!(pin.components, ["ok"]);
+    }
+
+    #[test]
+    fn detects_node_and_reads_pins() {
+        let dir = tempdir("node");
+        std::fs::write(dir.join("package.json"), r#"{"engines":{"node":">=20.9"}}"#).unwrap();
+        let kit = &detect(&dir)[0];
+        assert_eq!(kit.label(), "node 20");
+        assert!(kit.dockerfile.contains(r#"startswith("v20.")"#));
+        assert!(kit.dockerfile.contains("sha256sum -c -"));
+        assert_eq!(kit.artifacts, ["node_modules"]);
+
+        std::fs::write(dir.join(".tool-versions"), "rust 1.89\nnodejs 22.11.0\n").unwrap();
+        assert_eq!(node_version(&dir).as_deref(), Some("22.11.0"));
+        std::fs::write(dir.join(".nvmrc"), "lts/iron\n").unwrap();
+        assert_eq!(node_version(&dir).as_deref(), Some("lts"));
+    }
+
+    #[test]
+    fn node_version_spellings() {
+        for (raw, want) in [
+            ("v22", Some("22")),
+            ("22.x", Some("22")),
+            ("^18.17.0", Some("18")),
+            ("20.11.1", Some("20.11.1")),
+            ("lts/*", Some("lts")),
+            ("", Some("lts")),
+            ("$(curl evil)", None),
+        ] {
+            assert_eq!(normalize_node_version(raw).as_deref(), want, "{raw}");
+        }
+    }
+
+    #[test]
+    fn rust_and_node_together() {
+        let dir = tempdir("both");
+        std::fs::write(dir.join("Cargo.toml"), "").unwrap();
+        std::fs::write(dir.join("package.json"), "{}").unwrap();
+        let names: Vec<_> = detect(&dir).iter().map(|k| k.name).collect();
+        assert_eq!(names, ["rust", "node"]);
+        let forced = resolve(&dir, &["node".into(), "rust".into(), "node".into()]).unwrap();
+        assert_eq!(
+            forced.iter().map(|k| k.name).collect::<Vec<_>>(),
+            ["node", "rust"]
+        );
     }
 
     #[test]

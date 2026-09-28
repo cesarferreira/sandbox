@@ -84,17 +84,19 @@ Sandbox looks at the project and adds the toolchain it needs on top of the base 
 | Kit | Detected from | Installs | Cached between runs |
 |---|---|---|---|
 | `rust` | `Cargo.toml` | `rustup`, the toolchain from `rust-toolchain.toml` (else stable), `clippy`, `rustfmt`, pinned components and targets | cargo registry and git checkouts, `target/` |
+| `node` | `package.json` | Node from nodejs.org (checksum-verified): the version from `.nvmrc`, `.node-version`, `.tool-versions` or `engines.node`, else the current LTS; `corepack` for pnpm and yarn | npm, pnpm, yarn and corepack caches, `node_modules/` |
 
-The combined image is built once and tagged by its contents, so later runs start instantly and changing `rust-toolchain.toml` rebuilds it. Caches live on your machine under `~/.cache/sandbox/projects/<project>/`. The box's `target/` is kept there too, separate from your own `target/`, so Linux and macOS builds never overwrite each other.
+The combined image is built once and tagged by its contents, so later runs start instantly and changing `rust-toolchain.toml` rebuilds it. Caches live on your machine under `~/.cache/sandbox/projects/<project>/`. The box's `target/` and `node_modules/` are kept there too, separate from yours, so Linux builds and native modules never overwrite your macOS ones. A project with both `Cargo.toml` and `package.json` gets both kits.
 
 ```bash
 sandbox run -- cargo test                # in a Rust project: rust kit detected
-sandbox --kit rust shell                 # force a kit when detection misses it
+sandbox run -- npm test                  # in a Node project: node kit, pinned version
+sandbox --kit rust --kit node shell      # force kits when detection misses them
 sandbox --kit none shell                 # base image only
 sandbox --image rust:1 run -- cargo test # your own image; kits are skipped
 ```
 
-More kits (Node, Android/Gradle, Bazel, Go, Python) are on the roadmap in [plan.md](plan.md).
+More kits (Android/Gradle, Bazel, Go, Python) are on the roadmap in [plan.md](plan.md).
 
 ## Examples
 

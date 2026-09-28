@@ -109,7 +109,7 @@ pub struct BoxOpts {
     #[arg(long)]
     pub memory: Option<String>,
 
-    /// Toolchain kit to install (rust), replacing auto-detection; `none` turns kits off
+    /// Toolchain kit to install (rust, node), replacing auto-detection; `none` turns kits off
     #[arg(long, value_name = "KIT")]
     pub kit: Vec<String>,
 
