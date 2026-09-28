@@ -187,6 +187,9 @@ pub struct RunSpec {
     pub workdir: PathBuf,
     /// Persistent, per-project home directory inside the box.
     pub home: PathBuf,
+    /// Let x86_64 binaries run on Apple silicon. Docker Desktop emulates them already;
+    /// Apple `container` needs Rosetta switched on per box.
+    pub rosetta: bool,
     pub env: Vec<String>,
     pub uid: u32,
     pub gid: u32,
@@ -225,6 +228,9 @@ pub fn run_args(kind: Kind, spec: &RunSpec) -> Vec<String> {
         Kind::Docker | Kind::Nerdctl => {
             a.extend(["--user".into(), format!("{}:{}", spec.uid, spec.gid)]);
         }
+    }
+    if kind == Kind::AppleContainer && spec.rosetta {
+        a.push("--rosetta".into());
     }
     if kind != Kind::AppleContainer {
         a.extend(args(&[
@@ -491,6 +497,7 @@ mod tests {
             ],
             workdir: "/workspace/app".into(),
             home: "/home/cesar".into(),
+            rosetta: true,
             env: vec!["FOO=bar".into()],
             uid: 501,
             gid: 20,
@@ -527,6 +534,7 @@ mod tests {
         assert!(has_pair(&a, "--memory", "8192M"));
         assert!(has_pair(&a, "-w", "/workspace/app"));
         assert!(has_pair(&a, "-e", "HOME=/home/cesar"));
+        assert!(a.contains(&"--rosetta".to_string()));
         assert!(!a.contains(&"--pids-limit".to_string()));
         assert_eq!(&a[a.len() - 3..], ["debian:bookworm-slim", "bash", "-l"]);
     }
@@ -534,6 +542,7 @@ mod tests {
     #[test]
     fn docker_args() {
         let a = run_args(Kind::Docker, &spec());
+        assert!(!a.contains(&"--rosetta".to_string()));
         assert!(has_pair(&a, "--user", "501:20"));
         assert!(has_pair(&a, "-v", "/code/main/.git:/code/main/.git:ro"));
         assert!(has_pair(&a, "--security-opt", "no-new-privileges"));

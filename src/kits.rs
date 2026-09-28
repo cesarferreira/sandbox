@@ -5,7 +5,7 @@ use std::path::Path;
 
 use anyhow::{Result, bail};
 
-pub const KIT_NAMES: [&str; 2] = ["rust", "node"];
+pub const KIT_NAMES: [&str; 3] = ["rust", "node", "android"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Kit {
@@ -14,11 +14,19 @@ pub struct Kit {
     pub version: String,
     /// Dockerfile lines appended after `FROM <base>`.
     pub dockerfile: String,
-    /// Host-backed caches mounted into the box, as (cache name, box path).
-    pub caches: Vec<(&'static str, &'static str)>,
+    /// Host-backed caches mounted into the box, as (cache name, box path). A cache
+    /// may appear twice to be visible at two paths.
+    pub caches: Vec<(&'static str, String)>,
     /// Project-relative dirs replaced by a box-only cache, so Linux build output never
     /// mixes with the host's.
     pub artifacts: Vec<&'static str>,
+    /// Files written into a cache before the box starts, as (cache, relative path,
+    /// contents, overwrite). Existing files are kept unless `overwrite` is set.
+    pub seeds: Vec<(&'static str, String, Vec<u8>, bool)>,
+    /// Runs x86_64 binaries (via Rosetta on Apple silicon).
+    pub needs_x86_64: bool,
+    /// Printed before the box starts.
+    pub warnings: Vec<String>,
 }
 
 impl Kit {
@@ -43,6 +51,7 @@ pub fn resolve(root: &Path, requested: &[String]) -> Result<Vec<Kit>> {
         match name.as_str() {
             "rust" => kits.push(rust(root)),
             "node" => kits.push(node(root)),
+            "android" => kits.push(android(root)),
             other => bail!(
                 "unknown kit `{other}` (available: {}, or none)",
                 KIT_NAMES.join(", ")
@@ -66,7 +75,39 @@ pub fn detect(root: &Path) -> Vec<Kit> {
     if root.join("package.json").is_file() {
         kits.push(node(root));
     }
+    if is_android(root) {
+        kits.push(android(root));
+    }
     kits
+}
+
+/// An Android Gradle project: a build or settings file (or the version catalog) at the
+/// root or one level down mentions the Android Gradle plugin.
+fn is_android(root: &Path) -> bool {
+    let names = [
+        "build.gradle",
+        "build.gradle.kts",
+        "settings.gradle",
+        "settings.gradle.kts",
+        "gradle/libs.versions.toml",
+    ];
+    let mentions_agp = |path: &Path| {
+        std::fs::read_to_string(path).is_ok_and(|t| {
+            t.contains("com.android.application")
+                || t.contains("com.android.library")
+                || t.contains("com.android.tools.build")
+        })
+    };
+    let dirs = std::iter::once(root.to_path_buf()).chain(
+        std::fs::read_dir(root)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir()),
+    );
+    dirs.into_iter()
+        .any(|dir| names.iter().any(|n| mentions_agp(&dir.join(n))))
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -105,10 +146,13 @@ fn rust(root: &Path) -> Kit {
         version: channel,
         dockerfile,
         caches: vec![
-            ("cargo-registry", "/usr/local/cargo/registry"),
-            ("cargo-git", "/usr/local/cargo/git"),
+            ("cargo-registry", "/usr/local/cargo/registry".into()),
+            ("cargo-git", "/usr/local/cargo/git".into()),
         ],
         artifacts: vec!["target"],
+        seeds: vec![],
+        needs_x86_64: false,
+        warnings: vec![],
     }
 }
 
@@ -152,12 +196,15 @@ fn node(root: &Path) -> Kit {
         version,
         dockerfile,
         caches: vec![
-            ("npm-cache", "/var/cache/sandbox/npm"),
-            ("pnpm-store", "/var/cache/sandbox/pnpm"),
-            ("yarn-cache", "/var/cache/sandbox/yarn"),
-            ("corepack", "/var/cache/sandbox/corepack"),
+            ("npm-cache", "/var/cache/sandbox/npm".into()),
+            ("pnpm-store", "/var/cache/sandbox/pnpm".into()),
+            ("yarn-cache", "/var/cache/sandbox/yarn".into()),
+            ("corepack", "/var/cache/sandbox/corepack".into()),
         ],
         artifacts: vec!["node_modules"],
+        seeds: vec![],
+        needs_x86_64: false,
+        warnings: vec![],
     }
 }
 
@@ -205,6 +252,146 @@ fn normalize_node_version(raw: &str) -> Option<String> {
         .ok()
         .filter(|m| *m > 0)
         .map(|m| m.to_string())
+}
+
+/// Android command-line tools, pinned and verified (sha1 matches Google's
+/// repository2-3.xml; sha256 computed from that download).
+const ANDROID_CMDLINE_TOOLS: &str = "commandlinetools-linux-16111833_latest.zip";
+const ANDROID_CMDLINE_TOOLS_SHA256: &str =
+    "0877a1d048fe4a24efe2eff536ca4223f7adeb58648bb81909d33c446918cfa8";
+
+/// JDK 17 (what AGP 8 and 9 require), the x86_64 libc that Google's x86_64-only
+/// aapt2 needs on arm64, and the command-line tools with `sdkmanager` pointed at
+/// the SDK cache. AGP downloads platforms and build-tools into that cache itself.
+const ANDROID_DOCKERFILE: &str = r#"ENV ANDROID_HOME=/opt/android-sdk ANDROID_SDK_ROOT=/opt/android-sdk \
+    GRADLE_USER_HOME=/var/cache/sandbox/gradle
+RUN set -eu; \
+    if [ "$(dpkg --print-architecture)" != amd64 ]; then dpkg --add-architecture amd64; fi; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends openjdk-17-jdk-headless; \
+    if [ "$(dpkg --print-architecture)" != amd64 ]; then \
+      apt-get install -y --no-install-recommends libc6:amd64 libgcc-s1:amd64; fi; \
+    rm -rf /var/lib/apt/lists/*; \
+    cd /tmp; \
+    curl -fsSLO "https://dl.google.com/android/repository/{zip}"; \
+    echo "{sha256}  {zip}" | sha256sum -c -; \
+    mkdir -p /opt/android-cmdline-tools; \
+    unzip -q "{zip}" -d /opt/android-cmdline-tools; \
+    mv /opt/android-cmdline-tools/cmdline-tools /opt/android-cmdline-tools/latest; \
+    rm -f "{zip}"; \
+    for tool in sdkmanager avdmanager; do \
+      printf '#!/bin/sh\nexec /opt/android-cmdline-tools/latest/bin/%s --sdk_root="$ANDROID_HOME" "$@"\n' "$tool" \
+        > "/usr/local/bin/$tool"; \
+      chmod 755 "/usr/local/bin/$tool"; \
+    done; \
+    mkdir -p /opt/android-sdk /var/cache/sandbox/gradle /var/cache/sandbox/gradle-build; \
+    chmod -R a+rwX /opt/android-sdk /var/cache/sandbox
+ENV PATH=/opt/android-sdk/platform-tools:$PATH
+"#;
+
+/// Keeps the box's Gradle build output out of the project's `build/` dirs, so box
+/// builds (Linux) and host builds (Android Studio) don't keep invalidating each other.
+const GRADLE_BUILD_DIR_INIT: &str = r#"// Written by sandbox. Build output from the box goes to a cache instead of
+// the project's build/ directories, which stay the host's.
+allprojects {
+    def rel = project.projectDir.absolutePath.replaceFirst('^/workspace/?', '')
+    layout.buildDirectory.set(new File('/var/cache/sandbox/gradle-build/' + (rel ?: '_root'), 'build'))
+}
+"#;
+
+fn android(root: &Path) -> Kit {
+    let dockerfile = ANDROID_DOCKERFILE
+        .replace("{zip}", ANDROID_CMDLINE_TOOLS)
+        .replace("{sha256}", ANDROID_CMDLINE_TOOLS_SHA256);
+    let mut caches = vec![
+        ("android-sdk", "/opt/android-sdk".to_string()),
+        ("gradle", "/var/cache/sandbox/gradle".to_string()),
+        (
+            "gradle-build",
+            "/var/cache/sandbox/gradle-build".to_string(),
+        ),
+    ];
+    // local.properties usually points at the host's SDK, and AGP prefers it over
+    // ANDROID_HOME, so make the box's SDK visible at that path too.
+    if let Some(sdk_dir) = local_sdk_dir(root) {
+        caches.push(("android-sdk", sdk_dir));
+    }
+    let mut seeds = vec![(
+        "gradle",
+        "init.d/sandbox-build-dir.gradle".to_string(),
+        GRADLE_BUILD_DIR_INIT.as_bytes().to_vec(),
+        true,
+    )];
+    let licences = host_android_licences();
+    let mut warnings = vec![];
+    if licences.is_empty() {
+        warnings.push(
+            "android: no accepted Android SDK licences found on this machine. Read and accept \
+             them once with `sandbox --kit android run -- sdkmanager --licenses`"
+                .to_string(),
+        );
+    }
+    for (name, contents) in licences {
+        seeds.push(("android-sdk", format!("licenses/{name}"), contents, false));
+    }
+    Kit {
+        name: "android",
+        version: "jdk17".into(),
+        dockerfile,
+        caches,
+        artifacts: vec![".gradle"],
+        seeds,
+        needs_x86_64: true,
+        warnings,
+    }
+}
+
+/// `sdk.dir` from local.properties, when it's a plain absolute path.
+fn local_sdk_dir(root: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(root.join("local.properties")).ok()?;
+    let value = text.lines().find_map(|l| {
+        let (k, v) = l.split_once('=')?;
+        (k.trim() == "sdk.dir").then(|| v.trim().replace("\\:", ":").replace("\\\\", "\\"))
+    })?;
+    let safe = value.starts_with('/')
+        && value != "/"
+        && !value.contains("..")
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "/._- ".contains(c));
+    safe.then_some(value)
+}
+
+/// Licence files the user already accepted on the host (Android Studio or
+/// `sdkmanager --licenses`). They hold hashes of the accepted licence texts.
+fn host_android_licences() -> Vec<(String, Vec<u8>)> {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let candidates = ["ANDROID_HOME", "ANDROID_SDK_ROOT"]
+        .iter()
+        .filter_map(|v| std::env::var_os(v).map(std::path::PathBuf::from))
+        .chain(
+            home.iter()
+                .flat_map(|h| [h.join("Library/Android/sdk"), h.join("Android/Sdk")]),
+        );
+    for sdk in candidates {
+        let Ok(entries) = std::fs::read_dir(sdk.join("licenses")) else {
+            continue;
+        };
+        let licences: Vec<_> = entries
+            .flatten()
+            .filter(|e| e.path().is_file())
+            .filter_map(|e| {
+                let name = e.file_name().to_string_lossy().into_owned();
+                let safe = name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+                let contents = std::fs::read(e.path()).ok()?;
+                (safe && contents.len() < 4096).then_some((name, contents))
+            })
+            .collect();
+        if !licences.is_empty() {
+            return licences;
+        }
+    }
+    vec![]
 }
 
 /// Reads `rust-toolchain.toml`, or the legacy `rust-toolchain` file holding just a channel.
@@ -370,6 +557,65 @@ mod tests {
             forced.iter().map(|k| k.name).collect::<Vec<_>>(),
             ["node", "rust"]
         );
+    }
+
+    #[test]
+    fn detects_android_projects() {
+        let dir = tempdir("android");
+        std::fs::write(dir.join("settings.gradle.kts"), "include(\":app\")\n").unwrap();
+        assert!(!is_android(&dir), "plain Gradle is not Android");
+        std::fs::create_dir_all(dir.join("app")).unwrap();
+        std::fs::write(
+            dir.join("app/build.gradle.kts"),
+            "plugins { id(\"com.android.application\") }\n",
+        )
+        .unwrap();
+        assert!(is_android(&dir));
+        let kit = detect(&dir)
+            .into_iter()
+            .find(|k| k.name == "android")
+            .unwrap();
+        assert!(kit.needs_x86_64);
+        assert!(kit.dockerfile.contains(ANDROID_CMDLINE_TOOLS_SHA256));
+        assert!(
+            kit.seeds
+                .iter()
+                .any(|(c, p, _, _)| *c == "gradle" && p.ends_with("sandbox-build-dir.gradle"))
+        );
+    }
+
+    #[test]
+    fn mirrors_the_sdk_at_local_properties_path() {
+        let dir = tempdir("localprops");
+        std::fs::write(
+            dir.join("local.properties"),
+            "sdk.dir=/Users/me/Library/Android/sdk\n",
+        )
+        .unwrap();
+        assert_eq!(
+            local_sdk_dir(&dir).as_deref(),
+            Some("/Users/me/Library/Android/sdk")
+        );
+        let kit = android(&dir);
+        let sdk_paths: Vec<_> = kit
+            .caches
+            .iter()
+            .filter(|(c, _)| *c == "android-sdk")
+            .map(|(_, p)| p.as_str())
+            .collect();
+        assert_eq!(
+            sdk_paths,
+            ["/opt/android-sdk", "/Users/me/Library/Android/sdk"]
+        );
+
+        std::fs::write(
+            dir.join("local.properties"),
+            "sdk.dir=C\\:\\\\Android\\\\sdk\n",
+        )
+        .unwrap();
+        assert_eq!(local_sdk_dir(&dir), None, "non-POSIX paths are ignored");
+        std::fs::write(dir.join("local.properties"), "sdk.dir=/etc/../root\n").unwrap();
+        assert_eq!(local_sdk_dir(&dir), None);
     }
 
     #[test]

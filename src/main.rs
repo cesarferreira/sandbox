@@ -138,6 +138,8 @@ fn run_box(opts: BoxOpts, command: Vec<String>) -> Result<ExitCode> {
     mounts.push(cache_mount(&cache, "home", user.home())?);
 
     let agent = command.first().and_then(|c| agents::lookup(c));
+    let mut rosetta = false;
+    let mut kit_warnings = Vec::new();
     let (recipe, image_label) = match &opts.image {
         Some(image) => {
             if !opts.kit.is_empty() {
@@ -166,6 +168,8 @@ fn run_box(opts: BoxOpts, command: Vec<String>) -> Result<ExitCode> {
                 ));
             }
             mounts.extend(kit_mounts(&cache, &kits)?);
+            rosetta = std::env::consts::ARCH == "aarch64" && kits.iter().any(|k| k.needs_x86_64);
+            kit_warnings = kits.iter().flat_map(|k| k.warnings.clone()).collect();
             let label = std::iter::once("sandbox-base".to_string())
                 .chain(kits.iter().map(kits::Kit::label))
                 .chain(layers.iter().map(|(label, _)| label.clone()))
@@ -208,6 +212,7 @@ fn run_box(opts: BoxOpts, command: Vec<String>) -> Result<ExitCode> {
         mounts,
         workdir: project.workdir(),
         home: user.home().into(),
+        rosetta,
         env,
         uid,
         gid,
@@ -244,6 +249,9 @@ fn run_box(opts: BoxOpts, command: Vec<String>) -> Result<ExitCode> {
         eprintln!(
             "sandbox: warning: network is unrestricted (--net allowlist lands in milestone 3; use --net none to cut it off)"
         );
+    }
+    for warning in &kit_warnings {
+        eprintln!("sandbox: warning: {warning}");
     }
     if !agent_keys.is_empty() {
         eprintln!("sandbox: passing {} to the box", agent_keys.join(", "));
@@ -320,16 +328,27 @@ fn cache_mount(cache: &Path, name: &str, target: impl Into<PathBuf>) -> Result<M
     })
 }
 
-/// Kit caches and box-only build dirs, kept per project so they survive between runs.
+/// Kit caches, box-only build dirs and seeded files, kept per project so they survive
+/// between runs.
 fn kit_mounts(cache: &Path, kits: &[kits::Kit]) -> Result<Vec<Mount>> {
     let mut mounts = Vec::new();
     for kit in kits {
         for (name, target) in &kit.caches {
-            mounts.push(cache_mount(cache, name, *target)?);
+            mounts.push(cache_mount(cache, name, target.as_str())?);
         }
         for rel in &kit.artifacts {
-            let name = format!("{}-{rel}", kit.name);
+            let name = format!("{}-{}", kit.name, rel.trim_start_matches('.'));
             mounts.push(cache_mount(cache, &name, Path::new(WORKSPACE).join(rel))?);
+        }
+        for (name, rel, contents, overwrite) in &kit.seeds {
+            let path = cache.join(name).join(rel);
+            if *overwrite || !path.exists() {
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(&path, contents)
+                    .with_context(|| format!("writing {}", path.display()))?;
+            }
         }
     }
     Ok(mounts)

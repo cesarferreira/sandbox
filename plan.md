@@ -319,7 +319,7 @@ A plain Linux image lacks the project's toolchain, and the host's toolchain (mac
 |---|---|---|
 | rust | **done** | rustup + pinned toolchain; registry, git and `target/` cached |
 | node | **done** | nodejs.org tarball verified against SHASUMS256; pin from `.nvmrc` / `.node-version` / `.tool-versions` / `engines.node`, else LTS; corepack; npm/pnpm/yarn/corepack caches and `node_modules/` box-only. Only the root `node_modules` is isolated for now (workspace packages' nested ones are not). |
-| android / gradle | needs a spike | Google ships `aapt2` for Linux x86_64 only (AGP 9 pulls it from Maven). On Apple silicon: try `linux/amd64` + Rosetta first, then community arm64 builds via `android.aapt2FromMavenOverride`. SDK licences must be accepted by the user, never auto-accepted. Devices stay on the host (host `adb` on port 5037 via `host_ports`). |
+| android | **done** | JDK 17 + pinned cmdline-tools; AGP fetches platforms and build-tools into a per-project SDK cache. Host-accepted licences are copied in, never auto-accepted. A Gradle init script moves build dirs into a cache, so box and Android Studio builds don't thrash. The SDK is mirrored at `local.properties`' `sdk.dir`. On Apple silicon, the x86_64-only `aapt2` / platform-tools run via Rosetta (`container --rosetta`) or Docker Desktop's emulation, with `libc6:amd64` in the image. Verified: AGP 9.4.1 `assembleDebug` on both backends. Not covered yet: JDK other than 17, NDK/CMake, emulators and devices (use host `adb` via `host_ports`), a shared SDK cache across projects. |
 | bazel | planned | bazelisk; persistent output base, ideally a remote cache |
 | go, python (uv) | planned | |
 | iOS / Xcode | not possible in a Linux box | needs the native OS-sandbox backend (§10) |
