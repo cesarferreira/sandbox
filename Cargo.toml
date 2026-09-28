@@ -1,0 +1,25 @@
+[package]
+name = "agentbox"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Run AI coding agents in isolated, disposable sandboxes"
+license = "MIT"
+authors = ["Cesar Ferreira"]
+repository = "https://github.com/cesarferreira/agentbox"
+
+[[bin]]
+name = "agentbox"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+libc = "0.2.189"
+serde_json = "1.0.151"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"
