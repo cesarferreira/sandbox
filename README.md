@@ -197,10 +197,11 @@ Every run gets a new box that is removed on exit:
 - **A home per project.** `~` in the box is `/home/<you>`, kept under `~/.cache/sandbox/projects/<project>/home`. Agent logins, settings, history and dotfiles survive between runs, but one project's home is never visible from another project's box.
 - **You are you.** The box runs as your UID/GID with your username (so `whoami`, prompts and file ownership match your Mac), and `sandbox shell` prompts are prefixed with `(sandbox)`. Images need `sh` for this; the entry is added just before your command starts.
 - **Exit codes pass through.** Sandbox's own errors use `125`.
-- **Backend choice.** On Apple silicon with macOS 26, Sandbox uses Apple [`container`](https://github.com/apple/container), which gives one VM per box. Otherwise it falls back to Docker, Podman or nerdctl, and prints a warning that isolation is weaker.
+- **Backend choice.** On Apple silicon with macOS 26, Sandbox uses Apple [`container`](https://github.com/apple/container), which gives one VM per box. Otherwise it falls back to Docker, Podman or nerdctl, and prints a warning that isolation is weaker. Set `SANDBOX_BACKEND=docker` (or any other backend) to change the default; `--backend` still wins.
+- **VPNs and Apple `container`.** A VPN, or the network changing after Apple's container service started, can leave its boxes with no internet access. When Sandbox picked Apple `container` itself and the run needs the network, it checks first. The result is cached for 10 minutes when the network works and 1 minute when it doesn't. If the check fails, Sandbox uses Docker for that run and says why. `sandbox doctor` shows the same check. The fix is `container system stop && container system start` with the VPN off.
 - **Network.** `--net none` cuts all networking. The default is currently `open`; the `allowlist` mode and the credential broker are still to come.
 
-Options: `--image`, `--net none|open`, `--mount PATH[:rw]`, `-p/--publish`, `-e/--env`, `--gh`, `--kit`, `--cpus`, `--memory`, `--backend`, `--dry-run`. See [plan.md](plan.md) for the roadmap.
+Options: `--image`, `--net none|open`, `--mount PATH[:rw]`, `-p/--publish`, `-e/--env`, `--gh`, `--kit`, `--cpus`, `--memory`, `--backend` (or `SANDBOX_BACKEND`), `--dry-run`. See [plan.md](plan.md) for the roadmap.
 
 <a id="development"></a>
 ## Development

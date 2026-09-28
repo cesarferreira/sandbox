@@ -180,7 +180,17 @@ fn run_box(opts: BoxOpts, command: Vec<String>) -> Result<ExitCode> {
     };
 
     let selection = backend::select(opts.backend.as_deref())?;
-    let kind = selection.kind;
+    let needs_check =
+        selection.kind == Kind::AppleContainer && network == Network::Open && !opts.dry_run;
+    let (kind, network_warning) = if needs_check {
+        network_fallback(
+            selection.explicit,
+            backend::apple_network_ok(&image::cache_dir()?, true),
+            || Kind::Docker.probe().is_ok(),
+        )
+    } else {
+        (selection.kind, None)
+    };
     let setup_user = backend::needs_user_setup(kind);
     let mut env = box_env(std::env::vars(), opts.env);
     // Passed by name so the token reaches the box through our environment,
@@ -238,7 +248,14 @@ fn run_box(opts: BoxOpts, command: Vec<String>) -> Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    if let Some(warning) = &selection.warning {
+    if let Some(warning) = selection
+        .warning
+        .as_ref()
+        .filter(|_| kind == selection.kind)
+    {
+        eprintln!("sandbox: warning: {warning}");
+    }
+    if let Some(warning) = &network_warning {
         eprintln!("sandbox: warning: {warning}");
     }
     if let Some(recipe) = &recipe {
@@ -378,6 +395,27 @@ fn github_token() -> Result<String> {
     }
 }
 
+/// Given that Apple `container` was selected: keep it when its network works;
+/// otherwise switch to Docker if Sandbox chose the backend itself and Docker is
+/// usable, else keep it and warn.
+fn network_fallback(
+    explicit: bool,
+    network_ok: bool,
+    docker_ok: impl FnOnce() -> bool,
+) -> (Kind, Option<String>) {
+    if network_ok {
+        return (Kind::AppleContainer, None);
+    }
+    if !explicit && docker_ok() {
+        let warning = format!("{}. Using docker for this run", backend::APPLE_NETWORK_HINT);
+        return (Kind::Docker, Some(warning));
+    }
+    (
+        Kind::AppleContainer,
+        Some(backend::APPLE_NETWORK_HINT.to_string()),
+    )
+}
+
 fn exec_box(backend: Option<&str>, name: &str, command: &[String]) -> Result<ExitCode> {
     let kind = backend::select(backend)?.kind;
     let tty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
@@ -473,8 +511,18 @@ fn doctor() -> Result<ExitCode> {
             Ok(()) => println!("  ✓ {:16} ready", kind.name()),
             Err(why) => println!("  ✗ {:16} {why}", kind.name()),
         }
+        if kind == Kind::AppleContainer && kind.probe().is_ok() {
+            if backend::apple_network_ok(&image::cache_dir()?, false) {
+                println!("    {:16} boxes can reach the internet", "");
+            } else {
+                println!("    {:16} ✗ {}", "", backend::APPLE_NETWORK_HINT);
+            }
+        }
     }
     println!();
+    if let Ok(pinned) = std::env::var(backend::BACKEND_ENV) {
+        println!("{}  {pinned}", backend::BACKEND_ENV);
+    }
     match backend::select(None) {
         Ok(sel) => {
             println!("selected   {}", sel.kind.name());
@@ -658,6 +706,26 @@ mod tests {
         assert!(parse_mount(&format!("{raw}:ro")).unwrap().readonly);
         assert!(!parse_mount(&format!("{raw}:rw")).unwrap().readonly);
         assert!(parse_mount("/definitely/not/here").is_err());
+    }
+
+    #[test]
+    fn apple_network_fallback() {
+        assert_eq!(
+            network_fallback(false, true, || true),
+            (Kind::AppleContainer, None)
+        );
+        let (kind, warning) = network_fallback(false, false, || true);
+        assert_eq!(kind, Kind::Docker);
+        assert!(warning.unwrap().ends_with("Using docker for this run"));
+        // An explicit choice is respected; so is a missing Docker.
+        assert_eq!(
+            network_fallback(true, false, || true).0,
+            Kind::AppleContainer
+        );
+        assert_eq!(
+            network_fallback(false, false, || false).0,
+            Kind::AppleContainer
+        );
     }
 
     #[test]

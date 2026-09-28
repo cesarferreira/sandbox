@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
@@ -75,16 +76,26 @@ impl Kind {
 
 pub struct Selection {
     pub kind: Kind,
+    /// Chosen by `--backend` or `SANDBOX_BACKEND` rather than auto-detected.
+    pub explicit: bool,
     /// Set when macOS fell back from Apple `container` to a weaker backend.
     pub warning: Option<String>,
 }
 
+/// Env var setting the default backend, overridden by `--backend`.
+pub const BACKEND_ENV: &str = "SANDBOX_BACKEND";
+
 pub fn select(preference: Option<&str>) -> Result<Selection> {
+    let from_env = std::env::var(BACKEND_ENV)
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+    let preference = preference.or(from_env.as_deref().map(str::trim));
     if let Some(kind) = preference.map(Kind::parse).transpose()?.flatten() {
         kind.probe()
             .map_err(|why| anyhow::anyhow!("backend {} unavailable: {why}", kind.name()))?;
         return Ok(Selection {
             kind,
+            explicit: true,
             warning: None,
         });
     }
@@ -105,7 +116,11 @@ pub fn select(preference: Option<&str>) -> Result<Selection> {
                             kind.name()
                         )
                     });
-                return Ok(Selection { kind, warning });
+                return Ok(Selection {
+                    kind,
+                    explicit: false,
+                    warning,
+                });
             }
             Err(why) => reasons.push((kind, why)),
         }
@@ -119,6 +134,53 @@ pub fn select(preference: Option<&str>) -> Result<Selection> {
         detail.join("\n")
     )
 }
+
+/// Apple `container`'s VM network breaks when the host network changes under it
+/// (VPNs are the usual cause), leaving boxes with no DNS or internet. A tiny box
+/// checks; results are cached so most runs pay nothing.
+pub fn apple_network_ok(cache: &Path, use_cache: bool) -> bool {
+    const OK_TTL: Duration = Duration::from_secs(10 * 60);
+    const FAIL_TTL: Duration = Duration::from_secs(60);
+    let file = cache.join("apple-network");
+    if use_cache
+        && let Ok(text) = std::fs::read_to_string(&file)
+        && let Some(age) = std::fs::metadata(&file)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| SystemTime::now().duration_since(t).ok())
+    {
+        let ok = text.trim() == "ok";
+        if age < if ok { OK_TTL } else { FAIL_TTL } {
+            return ok;
+        }
+    }
+    // DNS failures stall for seconds, so cap the whole check.
+    let script = "timeout 2 wget -q -O /dev/null http://example.com";
+    let ok = Command::new(Kind::AppleContainer.bin())
+        .args([
+            "run",
+            "--rm",
+            "--progress",
+            "none",
+            "alpine",
+            "sh",
+            "-c",
+            script,
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    let _ = std::fs::create_dir_all(cache);
+    let _ = std::fs::write(&file, if ok { "ok" } else { "fail" });
+    ok
+}
+
+pub const APPLE_NETWORK_HINT: &str = "apple-container boxes have no internet access. This usually means a VPN is on, \
+     or the network changed after the container service started. Fix it with \
+     `container system stop && container system start` (with the VPN off), or use \
+     `--backend docker` / `SANDBOX_BACKEND=docker`";
 
 fn probe_apple_platform() -> Result<(), String> {
     if !cfg!(target_os = "macos") {
