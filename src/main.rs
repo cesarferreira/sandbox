@@ -1,5 +1,6 @@
 mod backend;
 mod cli;
+mod image;
 mod project;
 mod user;
 
@@ -17,7 +18,6 @@ use cli::{BoxOpts, Cli, Command, NetMode};
 use project::{Project, WORKSPACE};
 use user::BoxUser;
 
-const DEFAULT_IMAGE: &str = "debian:bookworm-slim";
 const DEFAULT_CPUS: u32 = 4;
 const DEFAULT_MEMORY: &str = "8g";
 /// Exit code for Sandbox's own failures, following the Docker convention.
@@ -134,6 +134,12 @@ fn run_box(opts: BoxOpts, command: Vec<String>) -> Result<ExitCode> {
     let user = BoxUser::new(std::env::var("USER").ok().as_deref(), uid, gid);
     let setup_user = backend::needs_user_setup(kind);
     let mut env = box_env(std::env::vars(), opts.env);
+    // Passed by name so the token reaches the box through our environment,
+    // never through argv (visible in `ps`) or --dry-run output.
+    let gh_token = if opts.gh { Some(github_token()?) } else { None };
+    if gh_token.is_some() {
+        env.push("GH_TOKEN".into());
+    }
     env.splice(
         0..0,
         [
@@ -143,7 +149,7 @@ fn run_box(opts: BoxOpts, command: Vec<String>) -> Result<ExitCode> {
     );
     let spec = RunSpec {
         name: format!("sandbox-{}-{}", project.slug(), short_id()),
-        image: opts.image.unwrap_or_else(|| DEFAULT_IMAGE.into()),
+        image: opts.image.clone().unwrap_or_else(image::base_tag),
         labels: vec![
             (backend::LABEL.into(), "1".into()),
             backend::project_label(&project.root),
@@ -178,15 +184,27 @@ fn run_box(opts: BoxOpts, command: Vec<String>) -> Result<ExitCode> {
     if let Some(warning) = &selection.warning {
         eprintln!("sandbox: warning: {warning}");
     }
+    if opts.image.is_none() {
+        image::ensure_base(kind)?;
+    }
     eprintln!("sandbox: {}", summary(kind, &spec));
     if network == Network::Open {
         eprintln!(
             "sandbox: warning: network is unrestricted (--net allowlist lands in milestone 3; use --net none to cut it off)"
         );
     }
+    if gh_token.is_some() {
+        eprintln!(
+            "sandbox: warning: --gh: your GitHub token is readable by anything running in the box"
+        );
+    }
 
-    let mut child = Process::new(kind.bin())
-        .args(&args)
+    let mut process = Process::new(kind.bin());
+    process.args(&args);
+    if let Some(token) = &gh_token {
+        process.env("GH_TOKEN", token);
+    }
+    let mut child = process
         .spawn()
         .with_context(|| format!("starting {}", kind.bin()))?;
     if setup_user {
@@ -225,6 +243,30 @@ fn prepare_user(kind: Kind, name: &str, user: &BoxUser, child: &mut Child) -> Re
         std::thread::sleep(Duration::from_millis(100));
     }
     Ok(())
+}
+
+/// The host's GitHub login: GH_TOKEN / GITHUB_TOKEN, else `gh auth token`.
+fn github_token() -> Result<String> {
+    for var in ["GH_TOKEN", "GITHUB_TOKEN"] {
+        if let Ok(token) = std::env::var(var)
+            && !token.trim().is_empty()
+        {
+            return Ok(token.trim().to_string());
+        }
+    }
+    let out = Process::new("gh")
+        .args(["auth", "token"])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output();
+    match out {
+        Ok(out) if out.status.success() && !out.stdout.trim_ascii().is_empty() => {
+            Ok(String::from_utf8_lossy(out.stdout.trim_ascii()).into_owned())
+        }
+        _ => bail!(
+            "--gh: no GitHub login found; run `gh auth login` on this machine or set GH_TOKEN"
+        ),
+    }
 }
 
 fn exec_box(backend: Option<&str>, name: &str, command: &[String]) -> Result<ExitCode> {

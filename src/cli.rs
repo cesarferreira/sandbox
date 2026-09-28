@@ -80,7 +80,7 @@ pub struct BoxOpts {
     #[arg(long, value_name = "BACKEND")]
     pub backend: Option<String>,
 
-    /// Image to run [default: debian:bookworm-slim]
+    /// Image to run [default: the Sandbox base image, built on first use]
     #[arg(long)]
     pub image: Option<String>,
 
@@ -109,6 +109,10 @@ pub struct BoxOpts {
     #[arg(long)]
     pub memory: Option<String>,
 
+    /// Let `gh` in the box use your GitHub login (GH_TOKEN; the token is readable inside the box)
+    #[arg(long)]
+    pub gh: bool,
+
     /// Print the backend command instead of running it
     #[arg(long)]
     pub dry_run: bool,
@@ -126,6 +130,7 @@ impl BoxOpts {
             env: [self.env, inner.env].concat(),
             cpus: inner.cpus.or(self.cpus),
             memory: inner.memory.or(self.memory),
+            gh: self.gh || inner.gh,
             dry_run: self.dry_run || inner.dry_run,
         }
     }

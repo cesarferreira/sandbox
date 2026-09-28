@@ -69,11 +69,85 @@ make build-release
 cd my-project
 sandbox doctor                          # which backend will be used, and why
 sandbox run -- bash -lc 'ls; id'        # any command, in a fresh box
-sandbox --net none codex --yolo         # shorthand: everything after the agent goes to it
+sandbox --net none make test            # shorthand: everything after the command goes to it
 sandbox shell                           # interactive shell in a fresh box
 sandbox ps                              # running boxes
 sandbox stop                            # stop this project's box (or: stop <name> / --all)
 ```
+
+The first run builds the base image (Debian with `git`, `rg`, `fd`, `tree`, `jq`, `gh`, `curl`, `python3`, `build-essential` and friends), which takes about a minute. Later runs reuse it.
+
+## Examples
+
+**Poke around safely.** Open a shell in a throwaway copy of your environment:
+
+```bash
+sandbox shell
+(sandbox)you@box:/workspace$ rg TODO
+(sandbox)you@box:/workspace$ cat ~/.ssh/id_ed25519   # No such file or directory
+```
+
+**Run an agent unattended**, with its API key passed in explicitly:
+
+```bash
+sandbox -e ANTHROPIC_API_KEY run --image my-claude-image -- claude --dangerously-skip-permissions
+sandbox -e OPENAI_API_KEY codex --yolo
+```
+
+(Agent images come with milestone 2. Until then, use an image that has the agent installed.)
+
+**Use `gh` with your login**: read issues, check CI, review PRs from inside the box:
+
+```bash
+sandbox --gh run -- gh pr checks 42
+sandbox --gh run -- gh issue view 17 --comments
+sandbox --gh shell                       # gh is logged in for the whole session
+```
+
+`--gh` passes your token (from `GH_TOKEN`, `GITHUB_TOKEN` or `gh auth token`) as `GH_TOKEN`. Anything in the box can read it, so use it when the task needs GitHub. `.git` stays read-only, so pushing still happens on your machine after you review.
+
+**Cut the network** for code you don't trust, like a fresh clone or an unknown `postinstall`:
+
+```bash
+sandbox --net none run -- make test
+sandbox --net none shell
+```
+
+**Try a dev server** without exposing it beyond your machine:
+
+```bash
+sandbox -p 3000 run -- python3 -m http.server 3000   # http://127.0.0.1:3000
+```
+
+**Give read-only access to one extra folder:**
+
+```bash
+sandbox --mount ~/Downloads/dataset run -- python3 analyze.py ~/Downloads/dataset
+sandbox --mount ~/notes:rw shell         # writable only because of :rw
+```
+
+**Work in a git worktree.** The main repo's `.git` is mounted read-only automatically:
+
+```bash
+git worktree add ../feature-x && cd ../feature-x
+sandbox shell
+```
+
+**Look inside a running box**, or clean up:
+
+```bash
+sandbox ps
+sandbox exec sandbox-myproj-1a2b3c -- git status
+sandbox stop --all
+```
+
+**See exactly what would run**, without running it:
+
+```bash
+sandbox --dry-run --net none -p 8080 shell
+```
+
+## What the box can and can't do
 
 Every run gets a new box that is removed on exit:
 
@@ -86,7 +160,7 @@ Every run gets a new box that is removed on exit:
 - **Backend choice.** On Apple silicon with macOS 26, Sandbox uses Apple [`container`](https://github.com/apple/container), which gives one VM per box. Otherwise it falls back to Docker, Podman or nerdctl, and prints a warning that isolation is weaker.
 - **Network.** `--net none` cuts all networking. The default is currently `open`; the `allowlist` mode and the credential broker are still to come.
 
-Options: `--image`, `--net none|open`, `--mount PATH[:rw]`, `-p/--publish`, `-e/--env`, `--cpus`, `--memory`, `--backend`, `--dry-run`. See [plan.md](plan.md) for the roadmap.
+Options: `--image`, `--net none|open`, `--mount PATH[:rw]`, `-p/--publish`, `-e/--env`, `--gh`, `--cpus`, `--memory`, `--backend`, `--dry-run`. See [plan.md](plan.md) for the roadmap.
 
 <a id="development"></a>
 ## Development
