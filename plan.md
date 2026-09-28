@@ -302,6 +302,28 @@ On later runs, a single line: `sandbox: using approved policy for my-project (co
 - **Artifact isolation.** `node_modules`, `target`, `.venv`, `build` and `.gradle` are placed on named volumes in the container, based on the detected project type. The container runs as the host's UID/GID.
 - **Reporter.** Writes a run record to `~/.local/share/sandbox/runs/<id>/`: the approved manifest, the command, timing, exit code, the egress log (allowed and blocked), and a git diffstat. Files are mode `0600`.
 
+### 6a. Toolchain kits (Milestone 2 design)
+
+A plain Linux image lacks the project's toolchain, and the host's toolchain (macOS binaries) can't run in the box. Sandbox therefore composes the image per project:
+
+1. **Choose the toolchain layer**, strongest first:
+   - `--image` (used as-is, no kits);
+   - `.sandbox/Dockerfile` (`FROM sandbox-base`) committed in the repo;
+   - an existing `.devcontainer/devcontainer.json`;
+   - **auto-detected kits**, overridable with `--kit NAME` / `--kit none`.
+2. **Kits are Dockerfile snippets** layered on the base image. Each reads the project's own version pins (`rust-toolchain.toml`, `.nvmrc`, `.bazelversion`, `compileSdk`…). Values taken from repo files are restricted to safe characters before they reach a `RUN` line.
+3. **The combined image is tagged by a hash of its Dockerfile.** It is built once, and rebuilt when a pin changes.
+4. **Every kit declares caches** (package registries, SDKs) and **build-output dirs** (`target/`, `build/`, `.gradle/`). Both are backed by host directories under `~/.cache/sandbox/projects/<project>/`. They are per project to avoid cross-project poisoning, and plain host directories so ownership is right on every backend.
+
+| Kit | Status | Notes |
+|---|---|---|
+| rust | **done** | rustup + pinned toolchain; registry, git and `target/` cached |
+| node | next | needed for `claude` / `codex` agent images too |
+| android / gradle | needs a spike | Google ships `aapt2` for Linux x86_64 only (AGP 9 pulls it from Maven). On Apple silicon: try `linux/amd64` + Rosetta first, then community arm64 builds via `android.aapt2FromMavenOverride`. SDK licences must be accepted by the user, never auto-accepted. Devices stay on the host (host `adb` on port 5037 via `host_ports`). |
+| bazel | planned | bazelisk; persistent output base, ideally a remote cache |
+| go, python (uv) | planned | |
+| iOS / Xcode | not possible in a Linux box | needs the native OS-sandbox backend (§10) |
+
 ### 7. CLI
 
 ```

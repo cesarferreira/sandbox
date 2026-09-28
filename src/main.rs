@@ -1,6 +1,7 @@
 mod backend;
 mod cli;
 mod image;
+mod kits;
 mod project;
 mod user;
 
@@ -128,6 +129,24 @@ fn run_box(opts: BoxOpts, command: Vec<String>) -> Result<ExitCode> {
         mounts.push(parse_mount(raw)?);
     }
 
+    let (recipe, image_label) = match &opts.image {
+        Some(image) => {
+            if !opts.kit.is_empty() {
+                bail!("--kit adds to the Sandbox base image, so it can't be combined with --image");
+            }
+            (None, image.clone())
+        }
+        None => {
+            let kits = kits::resolve(&project.root, &opts.kit)?;
+            mounts.extend(kit_mounts(&project, &kits)?);
+            let label = std::iter::once("sandbox-base".to_string())
+                .chain(kits.iter().map(kits::Kit::label))
+                .collect::<Vec<_>>()
+                .join(" + ");
+            (Some(image::with_kits(&kits)), label)
+        }
+    };
+
     let selection = backend::select(opts.backend.as_deref())?;
     let kind = selection.kind;
     let (uid, gid) = host_ids();
@@ -149,7 +168,10 @@ fn run_box(opts: BoxOpts, command: Vec<String>) -> Result<ExitCode> {
     );
     let spec = RunSpec {
         name: format!("sandbox-{}-{}", project.slug(), short_id()),
-        image: opts.image.clone().unwrap_or_else(image::base_tag),
+        image: recipe
+            .as_ref()
+            .map(|r| r.tag.clone())
+            .unwrap_or_else(|| image_label.clone()),
         labels: vec![
             (backend::LABEL.into(), "1".into()),
             backend::project_label(&project.root),
@@ -184,10 +206,10 @@ fn run_box(opts: BoxOpts, command: Vec<String>) -> Result<ExitCode> {
     if let Some(warning) = &selection.warning {
         eprintln!("sandbox: warning: {warning}");
     }
-    if opts.image.is_none() {
-        image::ensure_base(kind)?;
+    if let Some(recipe) = &recipe {
+        image::ensure(kind, recipe)?;
     }
-    eprintln!("sandbox: {}", summary(kind, &spec));
+    eprintln!("sandbox: {}", summary(kind, &image_label, &spec));
     if network == Network::Open {
         eprintln!(
             "sandbox: warning: network is unrestricted (--net allowlist lands in milestone 3; use --net none to cut it off)"
@@ -243,6 +265,41 @@ fn prepare_user(kind: Kind, name: &str, user: &BoxUser, child: &mut Child) -> Re
         std::thread::sleep(Duration::from_millis(100));
     }
     Ok(())
+}
+
+/// Kit caches and box-only build dirs, kept on the host under
+/// ~/.cache/sandbox/projects/<project>/ so they survive between runs. Plain host
+/// directories (not backend volumes) keep ownership right on every backend.
+fn kit_mounts(project: &Project, kits: &[kits::Kit]) -> Result<Vec<Mount>> {
+    let dir = image::cache_dir()?.join("projects").join(format!(
+        "{}-{:06x}",
+        project.slug(),
+        image::short_hash(&project.root.display().to_string()) & 0xff_ffff
+    ));
+    let mut mounts = Vec::new();
+    for kit in kits {
+        let caches = kit
+            .caches
+            .iter()
+            .map(|(name, target)| (name.to_string(), PathBuf::from(target)));
+        let artifacts = kit.artifacts.iter().map(|rel| {
+            (
+                format!("{}-{rel}", kit.name),
+                Path::new(WORKSPACE).join(rel),
+            )
+        });
+        for (name, target) in caches.chain(artifacts) {
+            let source = dir.join(name);
+            std::fs::create_dir_all(&source)
+                .with_context(|| format!("creating {}", source.display()))?;
+            mounts.push(Mount {
+                source,
+                target,
+                readonly: false,
+            });
+        }
+    }
+    Ok(mounts)
 }
 
 /// The host's GitHub login: GH_TOKEN / GITHUB_TOKEN, else `gh auth token`.
@@ -454,10 +511,13 @@ fn box_env(host: impl Iterator<Item = (String, String)>, user: Vec<String>) -> V
     env
 }
 
-fn summary(kind: Kind, spec: &RunSpec) -> String {
+fn summary(kind: Kind, image: &str, spec: &RunSpec) -> String {
+    let cache_root = image::cache_dir().ok();
+    let is_cache = |m: &&Mount| cache_root.as_ref().is_some_and(|c| m.source.starts_with(c));
     let mounts: Vec<String> = spec
         .mounts
         .iter()
+        .filter(|m| !is_cache(m))
         .map(|m| {
             let mode = if m.readonly { "ro" } else { "rw" };
             if m.source == m.target {
@@ -467,16 +527,26 @@ fn summary(kind: Kind, spec: &RunSpec) -> String {
             }
         })
         .collect();
+    let caches: Vec<String> = spec
+        .mounts
+        .iter()
+        .filter(is_cache)
+        .filter_map(|m| {
+            m.source
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+        })
+        .collect();
     let net = match spec.network {
         Network::None => "none",
         Network::Open => "open",
     };
-    format!(
-        "{} · {} · {} · net {net}",
-        kind.name(),
-        spec.image,
-        mounts.join(", ")
-    )
+    let mut line = format!("{} · {image} · {}", kind.name(), mounts.join(", "));
+    if !caches.is_empty() {
+        line.push_str(&format!(" · caches {}", caches.join(", ")));
+    }
+    line.push_str(&format!(" · net {net}"));
+    line
 }
 
 fn exit_code(status: std::process::ExitStatus) -> ExitCode {

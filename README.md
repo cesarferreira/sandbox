@@ -77,6 +77,25 @@ sandbox stop                            # stop this project's box (or: stop <nam
 
 The first run builds the base image (Debian with `git`, `rg`, `fd`, `tree`, `jq`, `gh`, `curl`, `python3`, `build-essential` and friends), which takes about a minute. Later runs reuse it.
 
+## Toolchains
+
+Sandbox looks at the project and adds the toolchain it needs on top of the base image:
+
+| Kit | Detected from | Installs | Cached between runs |
+|---|---|---|---|
+| `rust` | `Cargo.toml` | `rustup`, the toolchain from `rust-toolchain.toml` (else stable), `clippy`, `rustfmt`, pinned components and targets | cargo registry and git checkouts, `target/` |
+
+The combined image is built once and tagged by its contents, so later runs start instantly and changing `rust-toolchain.toml` rebuilds it. Caches live on your machine under `~/.cache/sandbox/projects/<project>/`. The box's `target/` is kept there too, separate from your own `target/`, so Linux and macOS builds never overwrite each other.
+
+```bash
+sandbox run -- cargo test                # in a Rust project: rust kit detected
+sandbox --kit rust shell                 # force a kit when detection misses it
+sandbox --kit none shell                 # base image only
+sandbox --image rust:1 run -- cargo test # your own image; kits are skipped
+```
+
+More kits (Node, Android/Gradle, Bazel, Go, Python) are on the roadmap in [plan.md](plan.md).
+
 ## Examples
 
 **Poke around safely.** Open a shell in a throwaway copy of your environment:
@@ -160,7 +179,7 @@ Every run gets a new box that is removed on exit:
 - **Backend choice.** On Apple silicon with macOS 26, Sandbox uses Apple [`container`](https://github.com/apple/container), which gives one VM per box. Otherwise it falls back to Docker, Podman or nerdctl, and prints a warning that isolation is weaker.
 - **Network.** `--net none` cuts all networking. The default is currently `open`; the `allowlist` mode and the credential broker are still to come.
 
-Options: `--image`, `--net none|open`, `--mount PATH[:rw]`, `-p/--publish`, `-e/--env`, `--gh`, `--cpus`, `--memory`, `--backend`, `--dry-run`. See [plan.md](plan.md) for the roadmap.
+Options: `--image`, `--net none|open`, `--mount PATH[:rw]`, `-p/--publish`, `-e/--env`, `--gh`, `--kit`, `--cpus`, `--memory`, `--backend`, `--dry-run`. See [plan.md](plan.md) for the roadmap.
 
 <a id="development"></a>
 ## Development

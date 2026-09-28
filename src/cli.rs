@@ -109,6 +109,10 @@ pub struct BoxOpts {
     #[arg(long)]
     pub memory: Option<String>,
 
+    /// Toolchain kit to install (rust), replacing auto-detection; `none` turns kits off
+    #[arg(long, value_name = "KIT")]
+    pub kit: Vec<String>,
+
     /// Let `gh` in the box use your GitHub login (GH_TOKEN; the token is readable inside the box)
     #[arg(long)]
     pub gh: bool,
@@ -130,6 +134,7 @@ impl BoxOpts {
             env: [self.env, inner.env].concat(),
             cpus: inner.cpus.or(self.cpus),
             memory: inner.memory.or(self.memory),
+            kit: [self.kit, inner.kit].concat(),
             gh: self.gh || inner.gh,
             dry_run: self.dry_run || inner.dry_run,
         }
