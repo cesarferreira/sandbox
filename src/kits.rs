@@ -117,6 +117,20 @@ struct RustToolchain {
     targets: Vec<String>,
 }
 
+/// cargo-nextest, pinned; the tarball is checked against the `.sha256` published
+/// with the same GitHub release.
+const NEXTEST_VERSION: &str = "0.9.146";
+const NEXTEST_DOCKERFILE: &str = r#"RUN set -eu; \
+    arch=$(uname -m); \
+    base="https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-{nextest}"; \
+    f="cargo-nextest-{nextest}-$arch-unknown-linux-gnu.tar.gz"; \
+    cd /tmp; \
+    curl -fsSLO "$base/$f"; \
+    curl -fsSL "$base/${f%.tar.gz}.sha256" | sha256sum -c -; \
+    tar -xzf "$f" -C /usr/local/cargo/bin; \
+    rm -f "$f"
+"#;
+
 fn rust(root: &Path) -> Kit {
     let pin = read_rust_toolchain(root);
     let channel = pin.channel.unwrap_or_else(|| "stable".into());
@@ -138,9 +152,10 @@ fn rust(root: &Path) -> Kit {
          RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \\\n \
          | sh -s -- -y --no-modify-path --profile minimal --default-toolchain {channel} \
          --component {components}{targets} \\\n \
-         && chmod -R a+rwX /usr/local/rustup /usr/local/cargo\n",
+         && chmod -R a+rwX /usr/local/rustup /usr/local/cargo\n{NEXTEST_DOCKERFILE}",
         components = components.join(","),
-    );
+    )
+    .replace("{nextest}", NEXTEST_VERSION);
     Kit {
         name: "rust",
         version: channel,
@@ -473,6 +488,8 @@ mod tests {
         let kits = detect(&dir);
         assert_eq!(kits.len(), 1);
         assert_eq!(kits[0].label(), "rust stable");
+        assert!(kits[0].dockerfile.contains("cargo-nextest-0.9.146"));
+        assert!(kits[0].dockerfile.contains("sha256sum -c -"));
         assert_eq!(kits[0].artifacts, ["target"]);
     }
 

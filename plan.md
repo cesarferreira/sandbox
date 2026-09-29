@@ -302,6 +302,15 @@ On later runs, a single line: `sandbox: using approved policy for my-project (co
 - **Artifact isolation.** `node_modules`, `target`, `.venv`, `build` and `.gradle` are placed on named volumes in the container, based on the detected project type. The container runs as the host's UID/GID.
 - **Reporter.** Writes a run record to `~/.local/share/sandbox/runs/<id>/`: the approved manifest, the command, timing, exit code, the egress log (allowed and blocked), and a git diffstat. Files are mode `0600`.
 
+### 6b. Host proxy (first piece of Milestone 3)
+
+VPNs break Apple `container`'s VM network. Boxes therefore reach the network through an HTTP CONNECT/forward proxy that `sandbox` runs on the host. The proxy listens on a private Unix socket, which `container run --ssh` forwards into the box, so neither the VM network nor the macOS application firewall is involved. The firewall silently drops inbound TCP to unsigned binaries, so a TCP proxy would have needed an allow prompt after every rebuild. In the box, a Perl one-liner bridges `127.0.0.1:3128` to the socket (`perl-base` is in every Debian image), and `HTTP(S)_PROXY` point there. This is where `--net allowlist` will hook in: the proxy already sees every CONNECT host.
+
+Limits:
+- Image builds can't use it: BuildKit's `--ssh` only carries the SSH-agent protocol. Builds fall back to Docker.
+- Tools that ignore proxy variables have no network while the VM network is broken.
+- The box's real SSH-agent forwarding is unavailable while the proxy uses `--ssh`.
+
 ### 6a. Toolchain kits (Milestone 2 design)
 
 A plain Linux image lacks the project's toolchain, and the host's toolchain (macOS binaries) can't run in the box. Sandbox therefore composes the image per project:
@@ -317,7 +326,7 @@ A plain Linux image lacks the project's toolchain, and the host's toolchain (mac
 
 | Kit | Status | Notes |
 |---|---|---|
-| rust | **done** | rustup + pinned toolchain; registry, git and `target/` cached |
+| rust | **done** | rustup + pinned toolchain + cargo-nextest (pinned, sha256-verified); registry, git and `target/` cached |
 | node | **done** | nodejs.org tarball verified against SHASUMS256; pin from `.nvmrc` / `.node-version` / `.tool-versions` / `engines.node`, else LTS; corepack; npm/pnpm/yarn/corepack caches and `node_modules/` box-only. Only the root `node_modules` is isolated for now (workspace packages' nested ones are not). |
 | android | **done** | JDK 17 + pinned cmdline-tools; AGP fetches platforms and build-tools into a per-project SDK cache. Host-accepted licences are copied in, never auto-accepted. A Gradle init script moves build dirs into a cache, so box and Android Studio builds don't thrash. The SDK is mirrored at `local.properties`' `sdk.dir`. On Apple silicon, the x86_64-only `aapt2` / platform-tools run via Rosetta (`container --rosetta`) or Docker Desktop's emulation, with `libc6:amd64` in the image. Verified: AGP 9.4.1 `assembleDebug` on both backends. Not covered yet: JDK other than 17, NDK/CMake, emulators and devices (use host `adb` via `host_ports`), a shared SDK cache across projects. |
 | bazel | planned | bazelisk; persistent output base, ideally a remote cache |

@@ -1,5 +1,5 @@
 use std::os::fd::AsFd;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
@@ -77,6 +77,15 @@ pub fn ensure(kind: Kind, recipe: &Recipe) -> Result<()> {
         let _ = std::fs::remove_file(&tar);
         return loaded;
     }
+    // Boxes reach the network through the host proxy, but Apple's builder can't:
+    // its `--ssh` forwarding only carries the SSH-agent protocol.
+    if kind == Kind::AppleContainer && !crate::backend::apple_network_ok(&cache_dir()?, false) {
+        bail!(
+            "building {tag} failed: {}. Builds need that network (running boxes don't); \
+             start Docker Desktop and Sandbox will build there and import the image",
+            crate::backend::APPLE_NETWORK_HINT
+        );
+    }
     bail!(
         "building {tag} with {} failed (see output above)",
         kind.name()
@@ -94,7 +103,7 @@ fn exists(kind: Kind, tag: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn build(kind: Kind, tag: &str, dir: &std::path::Path) -> Result<()> {
+fn build(kind: Kind, tag: &str, dir: &Path) -> Result<()> {
     run(Command::new(kind.bin()).args(["build", "-t", tag]).arg(dir))
 }
 

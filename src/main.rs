@@ -4,6 +4,7 @@ mod cli;
 mod image;
 mod kits;
 mod project;
+mod proxy;
 mod user;
 
 use std::io::IsTerminal;
@@ -180,8 +181,17 @@ fn run_box(opts: BoxOpts, command: Vec<String>) -> Result<ExitCode> {
     };
 
     let selection = backend::select(opts.backend.as_deref())?;
-    let needs_check =
-        selection.kind == Kind::AppleContainer && network == Network::Open && !opts.dry_run;
+    // On Apple `container`, network traffic goes through a host-side proxy, so it
+    // works even when a VPN breaks the VM network. Needs our images (for the bridge)
+    // and the root setup step (to open up the socket).
+    let host_proxy = selection.kind == Kind::AppleContainer
+        && network == Network::Open
+        && recipe.is_some()
+        && backend::needs_user_setup(selection.kind);
+    let needs_check = selection.kind == Kind::AppleContainer
+        && network == Network::Open
+        && !host_proxy
+        && !opts.dry_run;
     let (kind, network_warning) = if needs_check {
         network_fallback(
             selection.explicit,
@@ -202,6 +212,10 @@ fn run_box(opts: BoxOpts, command: Vec<String>) -> Result<ExitCode> {
     // The agent's own credentials, also by name. Other secrets still need -e.
     let agent_keys = agent.map(|a| a.present_keys()).unwrap_or_default();
     env.extend(agent_keys.iter().map(|k| k.to_string()));
+    if host_proxy {
+        env.extend(proxy::Proxy::env());
+        env.push("SANDBOX_BRIDGE".into());
+    }
     env.splice(
         0..0,
         [
@@ -223,6 +237,7 @@ fn run_box(opts: BoxOpts, command: Vec<String>) -> Result<ExitCode> {
         workdir: project.workdir(),
         home: user.home().into(),
         rosetta,
+        host_proxy,
         env,
         uid,
         gid,
@@ -284,6 +299,16 @@ fn run_box(opts: BoxOpts, command: Vec<String>) -> Result<ExitCode> {
     if let Some(token) = &gh_token {
         process.env("GH_TOKEN", token);
     }
+    // Kept alive until the box exits; the socket is removed on drop.
+    let _proxy = if host_proxy {
+        let proxy = proxy::Proxy::start(&spec.name)?;
+        // `container run --ssh` forwards whatever SSH_AUTH_SOCK names into the box.
+        process.env("SSH_AUTH_SOCK", &proxy.socket);
+        process.env("SANDBOX_BRIDGE", proxy::BRIDGE);
+        Some(proxy)
+    } else {
+        None
+    };
     let mut child = process
         .spawn()
         .with_context(|| format!("starting {}", kind.bin()))?;
@@ -639,6 +664,7 @@ fn summary(kind: Kind, image: &str, spec: &RunSpec) -> String {
         .collect();
     let net = match spec.network {
         Network::None => "none",
+        Network::Open if spec.host_proxy => "open (via host proxy)",
         Network::Open => "open",
     };
     let mut line = format!("{} · {image} · {}", kind.name(), mounts.join(", "));

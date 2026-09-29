@@ -83,14 +83,14 @@ Sandbox looks at the project and adds the toolchain it needs on top of the base 
 
 | Kit | Detected from | Installs | Cached between runs |
 |---|---|---|---|
-| `rust` | `Cargo.toml` | `rustup`, the toolchain from `rust-toolchain.toml` (else stable), `clippy`, `rustfmt`, pinned components and targets | cargo registry and git checkouts, `target/` |
+| `rust` | `Cargo.toml` | `rustup`, the toolchain from `rust-toolchain.toml` (else stable), `clippy`, `rustfmt`, pinned components and targets, and `cargo-nextest` (pinned, checksum-verified) | cargo registry and git checkouts, `target/` |
 | `node` | `package.json` | Node from nodejs.org (checksum-verified): the version from `.nvmrc`, `.node-version`, `.tool-versions` or `engines.node`, else the current LTS; `corepack` for pnpm and yarn | npm, pnpm, yarn and corepack caches, `node_modules/` |
 | `android` | a build, settings or version-catalog file (root or one level down) that mentions the Android Gradle plugin | JDK 17, Android command-line tools (checksum-pinned, with `sdkmanager` pointed at the cache), the x86_64 libc that Google's `aapt2` needs on arm64. AGP downloads platforms and build-tools itself. | the Android SDK, `~/.gradle`, Gradle build output, `.gradle/` |
 
 The combined image is built once and tagged by its contents, so later runs start instantly and changing `rust-toolchain.toml` rebuilds it. Caches live on your machine under `~/.cache/sandbox/projects/<project>/`. The box's `target/` and `node_modules/` are kept there too, separate from yours, so Linux builds and native modules never overwrite your macOS ones. A project with both `Cargo.toml` and `package.json` gets both kits.
 
 ```bash
-sandbox run -- cargo test                # in a Rust project: rust kit detected
+sandbox run -- cargo nextest run         # in a Rust project: rust kit detected
 sandbox run -- npm test                  # in a Node project: node kit, pinned version
 sandbox run -- ./gradlew assembleDebug   # in an Android project: android kit
 sandbox --kit rust --kit node shell      # force kits when detection misses them
@@ -198,7 +198,7 @@ Every run gets a new box that is removed on exit:
 - **You are you.** The box runs as your UID/GID with your username (so `whoami`, prompts and file ownership match your Mac), and `sandbox shell` prompts are prefixed with `(sandbox)`. Images need `sh` for this; the entry is added just before your command starts.
 - **Exit codes pass through.** Sandbox's own errors use `125`.
 - **Backend choice.** On Apple silicon with macOS 26, Sandbox uses Apple [`container`](https://github.com/apple/container), which gives one VM per box. Otherwise it falls back to Docker, Podman or nerdctl, and prints a warning that isolation is weaker. Set `SANDBOX_BACKEND=docker` (or any other backend) to change the default; `--backend` still wins.
-- **VPNs and Apple `container`.** A VPN, or the network changing after Apple's container service started, can leave its boxes with no internet access. When Sandbox picked Apple `container` itself and the run needs the network, it checks first. The result is cached for 10 minutes when the network works and 1 minute when it doesn't. If the check fails, Sandbox uses Docker for that run and says why. `sandbox doctor` shows the same check. The fix is `container system stop && container system start` with the VPN off.
+- **VPNs and Apple `container`.** VPN clients often break the virtual network that Apple `container` boxes use. So on Apple `container`, a box's traffic goes through a small proxy that Sandbox runs on your machine. The box reaches it over the VM's private channel rather than the network, and the proxy's own connections go through your VPN like any other app's. `HTTP(S)_PROXY` are set in the box, so `cargo`, `npm`, `git`, `curl`, `gh`, `pip`, `apt` and the agents all work with the VPN on. The summary line shows `net open (via host proxy)`. Tools that ignore proxy settings, and building images, still need the VM network. When that's broken, builds go to Docker if it's running; otherwise Sandbox says how to fix it (`container system stop && container system start` with the VPN off). `sandbox doctor` shows the VM network's state.
 - **Network.** `--net none` cuts all networking. The default is currently `open`; the `allowlist` mode and the credential broker are still to come.
 
 Options: `--image`, `--net none|open`, `--mount PATH[:rw]`, `-p/--publish`, `-e/--env`, `--gh`, `--kit`, `--cpus`, `--memory`, `--backend` (or `SANDBOX_BACKEND`), `--dry-run`. See [plan.md](plan.md) for the roadmap.

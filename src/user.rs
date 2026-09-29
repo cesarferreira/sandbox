@@ -5,7 +5,8 @@
 pub const READY_FLAG: &str = "/tmp/.sandbox-ready";
 
 /// How long the wrapper waits for the passwd entry before starting anyway.
-const WAIT: &str = r#"i=0; while [ ! -e /tmp/.sandbox-ready ] && [ $i -lt 100 ]; do sleep 0.05; i=$((i+1)); done; exec "$@""#;
+/// Also starts the host-proxy bridge (see `proxy::BRIDGE`) when the box has one.
+const WAIT: &str = r#"i=0; while [ ! -e /tmp/.sandbox-ready ] && [ $i -lt 100 ]; do sleep 0.05; i=$((i+1)); done; if [ -n "$SANDBOX_PROXY_SOCK" ] && [ -n "$SANDBOX_BRIDGE" ] && command -v perl >/dev/null 2>&1; then perl -e "$SANDBOX_BRIDGE" </dev/null >/dev/null 2>&1 & sleep 0.1; fi; unset SANDBOX_BRIDGE; exec "$@""#;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BoxUser {
@@ -43,7 +44,8 @@ impl BoxUser {
             "t=$(mktemp) && \
              grep -v -e '^{name}:' -e '^[^:]*:[^:]*:{uid}:' /etc/passwd > \"$t\"; \
              echo '{name}:x:{uid}:{gid}::{home}:/bin/sh' >> \"$t\" && cat \"$t\" > /etc/passwd; \
-             rm -f \"$t\"; touch {READY_FLAG}"
+             rm -f \"$t\"; chmod 666 {sock} 2>/dev/null; touch {READY_FLAG}",
+            sock = crate::proxy::BOX_SOCKET
         )
     }
 }

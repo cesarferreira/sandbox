@@ -252,6 +252,8 @@ pub struct RunSpec {
     /// Let x86_64 binaries run on Apple silicon. Docker Desktop emulates them already;
     /// Apple `container` needs Rosetta switched on per box.
     pub rosetta: bool,
+    /// Forward the host-side proxy's socket into the box (Apple `container --ssh`).
+    pub host_proxy: bool,
     pub env: Vec<String>,
     pub uid: u32,
     pub gid: u32,
@@ -293,6 +295,9 @@ pub fn run_args(kind: Kind, spec: &RunSpec) -> Vec<String> {
     }
     if kind == Kind::AppleContainer && spec.rosetta {
         a.push("--rosetta".into());
+    }
+    if kind == Kind::AppleContainer && spec.host_proxy {
+        a.push("--ssh".into());
     }
     if kind != Kind::AppleContainer {
         a.extend(args(&[
@@ -560,6 +565,7 @@ mod tests {
             workdir: "/workspace/app".into(),
             home: "/home/cesar".into(),
             rosetta: true,
+            host_proxy: true,
             env: vec!["FOO=bar".into()],
             uid: 501,
             gid: 20,
@@ -597,6 +603,7 @@ mod tests {
         assert!(has_pair(&a, "-w", "/workspace/app"));
         assert!(has_pair(&a, "-e", "HOME=/home/cesar"));
         assert!(a.contains(&"--rosetta".to_string()));
+        assert!(a.contains(&"--ssh".to_string()));
         assert!(!a.contains(&"--pids-limit".to_string()));
         assert_eq!(&a[a.len() - 3..], ["debian:bookworm-slim", "bash", "-l"]);
     }
@@ -605,6 +612,7 @@ mod tests {
     fn docker_args() {
         let a = run_args(Kind::Docker, &spec());
         assert!(!a.contains(&"--rosetta".to_string()));
+        assert!(!a.contains(&"--ssh".to_string()));
         assert!(has_pair(&a, "--user", "501:20"));
         assert!(has_pair(&a, "-v", "/code/main/.git:/code/main/.git:ro"));
         assert!(has_pair(&a, "--security-opt", "no-new-privileges"));
