@@ -13,7 +13,7 @@ const BASE_DOCKERFILE: &str = include_str!("../images/base/Dockerfile");
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Recipe {
     pub tag: String,
-    dockerfile: String,
+    pub(crate) dockerfile: String,
     parent: Option<Box<Recipe>>,
 }
 
@@ -61,13 +61,22 @@ pub fn ensure(kind: Kind, recipe: &Recipe) -> Result<()> {
     std::fs::write(dir.join("Dockerfile"), &recipe.dockerfile)?;
 
     eprintln!("sandbox: building image {tag} (first run only, this can take a few minutes)");
-    if build(kind, tag, &dir).is_ok() {
+    // Apple's builder VM loses its network under VPNs; don't bother trying it then.
+    let apple_offline =
+        kind == Kind::AppleContainer && !crate::backend::apple_network_ok(&cache_dir()?, true);
+    if !apple_offline && build(kind, tag, &dir).is_ok() {
         return Ok(());
     }
-    // Apple's builder runs in its own VM; if it can't build (no network, builder
-    // broken), a working Docker can build the image and hand it over.
-    if kind == Kind::AppleContainer && Kind::Docker.probe().is_ok() {
-        eprintln!("sandbox: apple-container build failed; building with docker and importing");
+    if kind != Kind::AppleContainer {
+        bail!(
+            "building {tag} with {} failed (see output above)",
+            kind.name()
+        );
+    }
+    // A working Docker builds faster and keeps layers shared; otherwise run the
+    // steps in a box, whose traffic goes through the host proxy.
+    if Kind::Docker.probe().is_ok() {
+        eprintln!("sandbox: building with docker and importing into apple-container");
         ensure(Kind::Docker, recipe)?;
         let tar = dir.join("image.tar");
         run(Command::new("docker").args(["save", tag, "-o"]).arg(&tar))?;
@@ -77,19 +86,7 @@ pub fn ensure(kind: Kind, recipe: &Recipe) -> Result<()> {
         let _ = std::fs::remove_file(&tar);
         return loaded;
     }
-    // Boxes reach the network through the host proxy, but Apple's builder can't:
-    // its `--ssh` forwarding only carries the SSH-agent protocol.
-    if kind == Kind::AppleContainer && !crate::backend::apple_network_ok(&cache_dir()?, false) {
-        bail!(
-            "building {tag} failed: {}. Builds need that network (running boxes don't); \
-             start Docker Desktop and Sandbox will build there and import the image",
-            crate::backend::APPLE_NETWORK_HINT
-        );
-    }
-    bail!(
-        "building {tag} with {} failed (see output above)",
-        kind.name()
-    )
+    crate::boxbuild::build(tag, &recipe.dockerfile, &dir)
 }
 
 fn exists(kind: Kind, tag: &str) -> bool {

@@ -306,10 +306,15 @@ On later runs, a single line: `sandbox: using approved policy for my-project (co
 
 VPNs break Apple `container`'s VM network. Boxes therefore reach the network through an HTTP CONNECT/forward proxy that `sandbox` runs on the host. The proxy listens on a private Unix socket, which `container run --ssh` forwards into the box, so neither the VM network nor the macOS application firewall is involved. The firewall silently drops inbound TCP to unsigned binaries, so a TCP proxy would have needed an allow prompt after every rebuild. In the box, a Perl one-liner bridges `127.0.0.1:3128` to the socket (`perl-base` is in every Debian image), and `HTTP(S)_PROXY` point there. This is where `--net allowlist` will hook in: the proxy already sees every CONNECT host.
 
+**Image builds:** BuildKit's `--ssh` only carries the SSH-agent protocol, so Apple's builder can't use the proxy. When its network is down, Sandbox builds with Docker if available. Otherwise it builds in a box: it runs the Dockerfile's steps as root in a box from the parent image (through the proxy), exports the filesystem, and loads it as a one-layer OCI image. This supports FROM, ARG, ENV and RUN, which is all Sandbox's own Dockerfiles use.
+
+**TLS inspection:** VPNs like Cloudflare WARP Gateway re-sign some sites with an MDM-installed CA. The CA certificates in the macOS System keychain (filtered to `CA:TRUE`, cached daily) are added to each box's bundle by the root setup step, plus `NODE_EXTRA_CA_CERTS`. Box builds install them via `update-ca-certificates` and remove them before export.
+
 Limits:
-- Image builds can't use it: BuildKit's `--ssh` only carries the SSH-agent protocol. Builds fall back to Docker.
 - Tools that ignore proxy variables have no network while the VM network is broken.
 - The box's real SSH-agent forwarding is unavailable while the proxy uses `--ssh`.
+- Java's trust store (Gradle, Android) doesn't get the host CAs at run time yet.
+- Docker builds don't get the host CAs yet.
 
 ### 6a. Toolchain kits (Milestone 2 design)
 

@@ -44,8 +44,9 @@ impl BoxUser {
             "t=$(mktemp) && \
              grep -v -e '^{name}:' -e '^[^:]*:[^:]*:{uid}:' /etc/passwd > \"$t\"; \
              echo '{name}:x:{uid}:{gid}::{home}:/bin/sh' >> \"$t\" && cat \"$t\" > /etc/passwd; \
-             rm -f \"$t\"; chmod 666 {sock} 2>/dev/null; touch {READY_FLAG}",
-            sock = crate::proxy::BOX_SOCKET
+             rm -f \"$t\"; chmod 666 {sock} 2>/dev/null; {trust}; touch {READY_FLAG}",
+            sock = crate::proxy::BOX_SOCKET,
+            trust = crate::certs::trust_script()
         )
     }
 }

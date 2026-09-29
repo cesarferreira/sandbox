@@ -1,5 +1,7 @@
 mod agents;
 mod backend;
+mod boxbuild;
+mod certs;
 mod cli;
 mod image;
 mod kits;
@@ -216,6 +218,21 @@ fn run_box(opts: BoxOpts, command: Vec<String>) -> Result<ExitCode> {
         env.extend(proxy::Proxy::env());
         env.push("SANDBOX_BRIDGE".into());
     }
+    // Corporate CAs (VPN TLS inspection) the host trusts; the root setup step adds
+    // them to the box's bundle, so this needs that step.
+    let host_cas = if setup_user {
+        certs::host_bundle(&image::cache_dir()?)
+    } else {
+        None
+    };
+    if let Some((dir, _)) = &host_cas {
+        mounts.push(Mount {
+            source: dir.clone(),
+            target: certs::BOX_DIR.into(),
+            readonly: true,
+        });
+        env.extend(certs::env());
+    }
     env.splice(
         0..0,
         [
@@ -287,6 +304,11 @@ fn run_box(opts: BoxOpts, command: Vec<String>) -> Result<ExitCode> {
     }
     if !agent_keys.is_empty() {
         eprintln!("sandbox: passing {} to the box", agent_keys.join(", "));
+    }
+    if let Some((_, count)) = &host_cas {
+        eprintln!(
+            "sandbox: trusting {count} CA certificate(s) from this Mac's System keychain (VPN TLS inspection)"
+        );
     }
     if gh_token.is_some() {
         eprintln!(
@@ -638,11 +660,15 @@ fn box_env(host: impl Iterator<Item = (String, String)>, user: Vec<String>) -> V
 
 fn summary(kind: Kind, image: &str, spec: &RunSpec) -> String {
     let cache_root = image::cache_dir().ok();
-    let is_cache = |m: &&Mount| cache_root.as_ref().is_some_and(|c| m.source.starts_with(c));
+    // Host CAs are reported on their own line, not as a cache.
+    let is_cache = |m: &&Mount| {
+        cache_root.as_ref().is_some_and(|c| m.source.starts_with(c))
+            && m.target != Path::new(certs::BOX_DIR)
+    };
     let mounts: Vec<String> = spec
         .mounts
         .iter()
-        .filter(|m| !is_cache(m))
+        .filter(|m| !is_cache(m) && m.target != Path::new(certs::BOX_DIR))
         .map(|m| {
             let mode = if m.readonly { "ro" } else { "rw" };
             if m.source == m.target {
